@@ -1,0 +1,39 @@
+# Copy this file to config.yaml and edit it, then run:
+#   python make_avatar.py --config config.yaml
+#
+# Every line in "lines" produces its own output video.
+# See README.md section 5 for the full list of supported language codes.
+
+photo: photos/me.jpg
+voice_sample: voice_samples/me.wav
+
+# Optional, same as the --refine-lipsync CLI flag: only takes effect with
+# --engine sadtalker. See README's Wav2Lip section for the tradeoff.
+# refine_lipsync: true
+
+# Optional, same as --cfg-weight/--exaggeration: tune Chatterbox's accent/
+# delivery. See README's "Voice accent & delivery" section.
+# cfg_weight: 0.2
+# exaggeration: 0.5
+
+# Optional, same as --scene-prompt: only used with --engine infinitetalk.
+# Describes the desired delivery/situation so InfiniteTalk's expression and
+# head motion actually fit it, not just the lip sync. See README's
+# InfiniteTalk section.
+# scene_prompt: >
+#   A person confidently delivering a business speech to an audience, natural
+#   professional facial expressions, subtle head movements, direct eye contact
+#   with the camera, business attire, neutral office background.
+
+lines:
+  - text: "Hello, this is my avatar speaking English."
+    lang: en
+    output: output/greeting_en.mp4
+
+  - text: "こんにちは、これは私のアバターです。"
+    lang: ja
+    output: output/greeting_ja.mp4
+
+  - text: "Bonjour, ceci est mon avatar qui parle."
+    lang: fr
+    output: output/greeting_fr.mp4

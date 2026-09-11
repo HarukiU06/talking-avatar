@@ -1,0 +1,10 @@
+# This file is informational only — do NOT `pip install -r requirements.txt`
+# directly. chatterbox-tts hard-pins torch==2.6.0 in its own metadata, which
+# has no support for Blackwell (RTX 50-series) GPUs, and SadTalker's own
+# requirements.txt pins numpy/librosa/scipy versions that conflict with
+# chatterbox's. setup.sh installs everything in the right order with
+# --no-deps where needed to avoid both problems — always use setup.sh.
+
+chatterbox-tts
+pyyaml
+torchaudio

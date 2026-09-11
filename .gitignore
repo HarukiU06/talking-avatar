@@ -1,0 +1,22 @@
+# Python virtual environments (created by setup*.sh)
+talking-avatar/.venv/
+talking-avatar/.venv-*/
+
+# Vendored third-party model repos (cloned by setup*.sh)
+talking-avatar/SadTalker/
+talking-avatar/LatentSync/
+talking-avatar/LivePortrait/
+talking-avatar/Wav2Lip/
+talking-avatar/InfiniteTalk/
+
+# Downloaded model weights (fetched by setup.sh's GFPGAN install step)
+talking-avatar/gfpgan/
+
+# User-specific inputs/outputs and local config
+talking-avatar/photos/
+talking-avatar/voice_samples/
+talking-avatar/output/
+talking-avatar/config.yaml
+
+__pycache__/
+*.pyc
