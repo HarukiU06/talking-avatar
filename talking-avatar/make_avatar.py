@@ -272,7 +272,7 @@ def synthesize_speech_xtts(text: str, lang: str, voice_sample: str, out_wav: str
     return out_wav
 
 
-def denoise(audio: "np.ndarray", sr: int, strength: float = 0.8) -> "np.ndarray":
+def denoise(audio: "np.ndarray", sr: int, strength: float = 0.6) -> "np.ndarray":
     """Strip stationary background noise (room tone, hiss, hum) from speech.
 
     This matters most on the *reference* clip, not the output. A voice
@@ -286,8 +286,10 @@ def denoise(audio: "np.ndarray", sr: int, strength: float = 0.8) -> "np.ndarray"
     noise at its origin; cleaning the output only attacks it after it has been
     baked in, and risks eroding the voice along with it.
 
-    strength is noisereduce's prop_decrease: 1.0 removes the most noise but
-    starts thinning the voice, so the default stops short of that.
+    strength is noisereduce's prop_decrease. The default is 0.6, set by a
+    listening test rather than by the measurements: 0.8 scored better on both
+    noise floor and speaker similarity, but sounded over-processed to the
+    person whose voice it is. Neither metric captures that, so the ear wins.
     """
     import noisereduce as nr
 
@@ -320,7 +322,7 @@ def _best_window_start(audio: "np.ndarray", sr: int, seconds: float) -> int:
 
 
 def pick_best_window(audio_path: str, seconds: float = 25.0,
-                     target_sr: int = 22050, denoise_ref: float = 0.8) -> str:
+                     target_sr: int = 22050, denoise_ref: float = 0.6) -> str:
     """Return the best `seconds`-long excerpt of a recording, as a temp wav.
 
     Seed-VC truncates its reference to the first 25 seconds
@@ -357,7 +359,7 @@ def pick_best_window(audio_path: str, seconds: float = 25.0,
 
 def convert_voice(source_wav: str, target_voice: str, out_wav: str,
                   diffusion_steps: int = 25, cfg_rate: float = 0.7,
-                  length_adjust: float = 1.0, denoise_ref: float = 0.8) -> str:
+                  length_adjust: float = 1.0, denoise_ref: float = 0.6) -> str:
     """Replace the speaker identity in `source_wav` with the one in `target_voice`.
 
     This is the second half of the two-stage voice pipeline. Zero-shot TTS
@@ -1040,7 +1042,7 @@ def make_one(photo: str, voice_sample: str, text: str, lang: str, out_video: str
              prep_voice: bool = True, motion_video: str = None,
              motion_scale: float = 1.0, keep_intermediates: bool = False,
              keep_tts_warm: bool = False, voice_convert: bool = False,
-             vc_target: str = None, vc_steps: int = 25, vc_denoise: float = 0.8,
+             vc_target: str = None, vc_steps: int = 25, vc_denoise: float = 0.6,
              **engine_opts) -> None:
     kept = []  # intermediates to report instead of delete, when asked
 
@@ -1146,7 +1148,7 @@ def run_batch(config_path: str, engine: str = "latentsync", pause_ms: int = 0,
               tts: str = "chatterbox", prep_voice: bool = True,
               motion_video: str = None, motion_scale: float = 1.0,
               keep_intermediates: bool = False, voice_convert: bool = False,
-              vc_target: str = None, vc_steps: int = 25, vc_denoise: float = 0.8,
+              vc_target: str = None, vc_steps: int = 25, vc_denoise: float = 0.6,
               **engine_opts) -> None:
     cfg = yaml.safe_load(Path(config_path).read_text())
     photo = cfg["photo"]
@@ -1214,13 +1216,14 @@ def main():
                              "--voice is). Point this at a longer recording of yourself if "
                              "you have one - it only has to establish identity, so it can be "
                              "longer and less pristine than the TTS reference")
-    parser.add_argument("--vc-denoise", type=float, default=0.8,
+    parser.add_argument("--vc-denoise", type=float, default=0.6,
                         help="How hard to denoise the Seed-VC reference before conversion "
-                             "(0 = off, 0.8 = default, 1.0 = maximum). Conversion copies the "
+                             "(0 = off, 0.6 = default, 1.0 = maximum). Conversion copies the "
                              "reference's room tone onto every line along with the voice, so "
                              "cleaning it here removes background noise at its source. "
-                             "Measured on this project's own recording, 0.8 cut the output's "
-                             "noise floor by ~13dB AND improved speaker similarity")
+                             "0.6 was chosen by ear; higher values measure better on both "
+                             "noise floor and speaker similarity but start sounding "
+                             "over-processed. Raise it if noise still gets through")
     parser.add_argument("--vc-steps", type=int, default=25,
                         help="Seed-VC diffusion steps (default 25). Higher is cleaner and "
                              "slower; 30-50 is upstream's suggestion for singing")
