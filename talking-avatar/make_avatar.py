@@ -738,6 +738,56 @@ def make_looped_video(photo: str, duration_s: float, fps: int = 25) -> str:
     return out
 
 
+def fit_source_video(video: str, duration_s: float, max_dim: int = 768) -> str:
+    """Prepare a real recording of the speaker to be lip-synced directly.
+
+    This is the path that exists because animating a still photo does not
+    work well. LatentSync regenerates only the mouth and passes everything
+    else through, so when the input is genuine footage of the person, the
+    output keeps their real head motion, real blinks and real expression —
+    none of which a model has to invent, and none of which repeats. Driving a
+    photo with a borrowed clip instead produces that clip's mannerisms on a
+    loop, which is what "unnatural" usually turns out to mean here.
+
+    Downscaled for the same reason as prepare_photo(max_dim=768): LatentSync
+    loads every frame into RAM at once, so a 1080p phone recording exhausts
+    system memory long before VRAM becomes the limit. Shorter-than-audio
+    clips are ping-pong looped, which is far less noticeable on a 1-2 minute
+    recording than on a 3-second one, but recording long enough to avoid
+    looping altogether is better still.
+    """
+    if not Path(video).exists():
+        raise FileNotFoundError(f"Source video not found: {video}")
+
+    clip_duration = _video_duration(video)
+    scale = (f"scale='min({max_dim},iw)':'min({max_dim},ih)'"
+             ":force_original_aspect_ratio=decrease,"
+             "scale=trunc(iw/2)*2:trunc(ih/2)*2")
+
+    if clip_duration < duration_s:
+        looped = _ping_pong_loop(video, duration_s)
+        try:
+            out = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", looped, "-an", "-vf", scale,
+                 "-c:v", "libx264", "-pix_fmt", "yuv420p", out],
+                check=True, capture_output=True,
+            )
+        finally:
+            os.remove(looped)
+        print(f"Source video is {clip_duration:.1f}s for {duration_s:.1f}s of speech - "
+              "ping-pong looped. Record a longer clip to avoid the repetition.")
+        return out
+
+    out = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", os.path.abspath(video), "-t", str(duration_s),
+         "-an", "-vf", scale, "-c:v", "libx264", "-pix_fmt", "yuv420p", out],
+        check=True, capture_output=True,
+    )
+    return out
+
+
 def make_idle_motion_video(photo: str, duration_s: float, motion_video: str = None,
                            motion_scale: float = 1.0) -> str:
     """Animate the photo with natural idle head motion + blinking, looped
@@ -1036,6 +1086,7 @@ def render_infinitetalk(
 
 
 def make_one(photo: str, voice_sample: str, text: str, lang: str, out_video: str,
+             source_video: str = None,
              engine: str = "latentsync", pause_ms: int = 0, motion: str = "idle",
              refine_lipsync_pass: bool = False, cfg_weight: float = 0.5,
              exaggeration: float = 0.5, tts: str = "chatterbox",
@@ -1109,7 +1160,10 @@ def make_one(photo: str, voice_sample: str, text: str, lang: str, out_video: str
                     "generates the mouth from audio at higher fidelity than Wav2Lip's patch "
                     "would; skipping."
                 )
-            render_infinitetalk(photo, tmp_wav, out_video, **engine_opts)
+            # InfiniteTalk's cond_video field takes an image OR a video; with
+            # real footage it re-drives the person's own recording instead of
+            # animating a still, which is the mode worth using.
+            render_infinitetalk(source_video or photo, tmp_wav, out_video, **engine_opts)
         else:
             if refine_lipsync_pass:
                 print(
@@ -1121,8 +1175,19 @@ def make_one(photo: str, voice_sample: str, text: str, lang: str, out_video: str
             # once before processing. A long clip at a phone photo's full
             # resolution (e.g. 2316x3088) can exhaust system RAM well before
             # GPU VRAM becomes the limit — downscale first.
-            prepared_photo = prepare_photo(photo, max_dim=768)
             duration_s = sf.info(tmp_wav).duration
+            if source_video:
+                # Real footage of the speaker: no motion to synthesize, so
+                # LivePortrait is skipped entirely and LatentSync syncs the
+                # mouth onto the person's own recording.
+                prepared_photo = photo
+                driving_video = fit_source_video(source_video, duration_s)
+                try:
+                    run_latentsync(driving_video, tmp_wav, out_video, **engine_opts)
+                finally:
+                    discard(driving_video, "prepared source video")
+                return
+            prepared_photo = prepare_photo(photo, max_dim=768)
             if motion == "idle":
                 driving_video = make_idle_motion_video(
                     prepared_photo, duration_s,
@@ -1143,6 +1208,7 @@ def make_one(photo: str, voice_sample: str, text: str, lang: str, out_video: str
 
 
 def run_batch(config_path: str, engine: str = "latentsync", pause_ms: int = 0,
+              source_video: str = None,
               motion: str = "idle", refine_lipsync_pass: bool = False,
               cfg_weight: float = 0.5, exaggeration: float = 0.5,
               tts: str = "chatterbox", prep_voice: bool = True,
@@ -1151,7 +1217,8 @@ def run_batch(config_path: str, engine: str = "latentsync", pause_ms: int = 0,
               vc_target: str = None, vc_steps: int = 25, vc_denoise: float = 0.6,
               **engine_opts) -> None:
     cfg = yaml.safe_load(Path(config_path).read_text())
-    photo = cfg["photo"]
+    photo = cfg.get("photo")
+    source_video = cfg.get("video", source_video)
     voice_sample = cfg["voice_sample"]
     lines = cfg["lines"]
     # CLI flags OR with matching top-level config.yaml keys (applies to the
@@ -1172,7 +1239,8 @@ def run_batch(config_path: str, engine: str = "latentsync", pause_ms: int = 0,
         lang = line.get("lang", "en")
         out = line.get("output", f"output/line_{i}.mp4")
         print(f"\n[{i}/{len(lines)}] ({lang}) {text[:60]}{'...' if len(text) > 60 else ''}")
-        make_one(photo, voice_sample, text, lang, out, engine=engine, pause_ms=pause_ms,
+        make_one(photo, voice_sample, text, lang, out, source_video=source_video,
+                 engine=engine, pause_ms=pause_ms,
                  motion=motion, refine_lipsync_pass=refine_lipsync_pass,
                  cfg_weight=cfg_weight, exaggeration=exaggeration, tts=tts,
                  prep_voice=prep_voice, motion_video=motion_video,
@@ -1188,6 +1256,14 @@ def main():
     parser = argparse.ArgumentParser(description="Generate talking-avatar videos from text.")
     parser.add_argument("--config", help="YAML file with a batch of pre-entered lines")
     parser.add_argument("--photo", help="Path to your face photo")
+    parser.add_argument("--video",
+                        help="A real video of you instead of a photo - 1-2 min, front-facing, "
+                             "NOT talking (just looking at the camera, blinking, small "
+                             "movements). Your own head motion and expression are kept and "
+                             "only the mouth is re-synced, which avoids the looped borrowed "
+                             "mannerisms you get when animating a still photo. Works with "
+                             "--engine latentsync (skips LivePortrait) and --engine "
+                             "infinitetalk (video-to-video)")
     parser.add_argument("--voice", help="Path to your voice sample (6-30s, clean, wav/mp3)")
     parser.add_argument("--text", help="Text to speak")
     parser.add_argument("--lang", default="en", help="Language code (see README section 5)")
@@ -1362,6 +1438,7 @@ def main():
         )
 
     shared_opts = dict(
+        source_video=args.video,
         engine=args.engine, pause_ms=args.pause_ms, motion=args.motion,
         refine_lipsync_pass=args.refine_lipsync, cfg_weight=args.cfg_weight,
         exaggeration=args.exaggeration, tts=args.tts,
@@ -1374,11 +1451,12 @@ def main():
     try:
         if args.config:
             run_batch(args.config, **shared_opts, **engine_opts)
-        elif args.photo and args.voice and args.text and args.out:
+        elif (args.photo or args.video) and args.voice and args.text and args.out:
             make_one(args.photo, args.voice, args.text, args.lang, args.out,
                      **shared_opts, **engine_opts)
         else:
-            parser.error("Either --config, or all of --photo --voice --text --out are required.")
+            parser.error("Either --config, or --voice --text --out plus one of "
+                         "--photo / --video, are required.")
     finally:
         cleanup_prepared_voices()
 

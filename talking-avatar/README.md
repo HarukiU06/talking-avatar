@@ -56,12 +56,21 @@ come back to finished `.mp4` files.
   better up to ~30s, and this one file determines the voice in every video
   you ever generate; it's worth a second take. Mono or stereo, any sample
   rate — the pipeline normalizes it.
-- **Optional but high-impact: 15–20 seconds of video of your head not
-  talking** — e.g. `photos/idle_motion.mp4`. Look at the camera, blink
-  naturally, small nods and turns, slight expression shifts, mouth mostly
-  closed. Pass it as `--motion-video`. This replaces the bundled 3-second
-  stock clip that drives your photo's head motion, and it is the single
-  biggest realism improvement available here — see section 6.
+- **Strongly recommended: 1–2 minutes of video of yourself not talking** —
+  e.g. `photos/me.mp4`. Look at the camera, blink naturally, small nods and
+  turns, slight expression shifts, mouth mostly closed. Pass it as
+  `--video`, in place of `--photo`.
+
+  **This is the single biggest quality decision in the whole pipeline.** With
+  a photo, the head motion has to be invented — copied from a stock clip of a
+  stranger and looped every few seconds, which is what produces eyes tracking
+  side to side on a cycle and smiles appearing at random. With video, your
+  own motion, blinks and expression are already there and only the mouth is
+  re-synced. Nothing is invented, so nothing repeats.
+
+  Two practical notes: record longer than your typical line so no looping is
+  needed at all, and wear the expression you want the avatar to have — with
+  `--engine latentsync` the expression is carried through unchanged.
 
 ## 3. Setup
 
@@ -253,12 +262,16 @@ deliberate quality-over-speed tradeoff, not a bug.
 
 ```bash
 python make_avatar.py \
-  --photo photos/me.jpg \
+  --video photos/me.mp4 \
   --voice voice_samples/me.wav \
+  --voice-convert \
   --text "Hello, this is a test of my avatar." \
   --lang en \
   --out output/test.mp4
 ```
+
+`--photo photos/me.jpg` works in place of `--video` if you have no footage,
+but expect noticeably worse results — see section 2.
 
 ### Batch mode (pre-enter multiple lines/languages at once)
 
