@@ -16,6 +16,20 @@ voice_sample: voice_samples/me.wav
 # cfg_weight: 0.2
 # exaggeration: 0.5
 
+# Optional, same as --tts: which voice-cloning model to use for the whole
+# batch. "chatterbox" (default, 23 languages) or "xtts" (17 languages, often
+# closer timbre — needs ./setup_xtts.sh). Use `--voice-compare` to pick one
+# before committing a whole batch to it.
+# tts: xtts
+
+# Optional, same as --motion-video/--motion-scale: only used with the default
+# latentsync engine. motion_video is your own 15-20s clip of your head idling
+# and blinking, used to animate the photo instead of LivePortrait's bundled
+# 3-second stock clip — the biggest realism win available. See README
+# section 2 for how to record one, and section 6 for the reasoning.
+# motion_video: photos/idle_motion.mp4
+# motion_scale: 1.3
+
 # Optional, same as --scene-prompt: only used with --engine infinitetalk.
 # Describes the desired delivery/situation so InfiniteTalk's expression and
 # head motion actually fit it, not just the lip sync. See README's

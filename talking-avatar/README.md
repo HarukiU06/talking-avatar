@@ -5,7 +5,7 @@ any text you type, in any of 23 languages. Everything runs locally — no cloud
 service, no per-video cost, your face and voice never leave your computer.
 
 **Pipeline:**
-1. **Text → speech in your voice** — [Chatterbox Multilingual TTS](https://github.com/resemble-ai/chatterbox) (Resemble AI, MIT license) clones your voice from a short reference clip and speaks your text in it. Long, multi-sentence text is split into sentences and synthesized separately with a silence gap spliced between them (`--pause-ms`, default 450ms) — Chatterbox has no built-in pause control, so a whole paragraph sent in one shot comes out as one breathless run-on otherwise.
+1. **Text → speech in your voice** — [Chatterbox Multilingual TTS](https://github.com/resemble-ai/chatterbox) (Resemble AI, MIT license) clones your voice from a short reference clip and speaks your text in it. Your reference clip is automatically cleaned up first (downmixed to mono, resampled, silence-trimmed, level-matched) — zero-shot cloning derives your entire voice identity from that one file, so its defects are inherited by every line you generate. If the clone still doesn't sound enough like you, `--tts xtts` swaps in [XTTS-v2](https://github.com/idiap/coqui-ai-TTS), which often matches timbre more closely (17 languages instead of 23 — see section 3), and `--voice-compare` renders the same line through every setting so you can pick by ear. Long, multi-sentence text is split into sentences and synthesized separately with a silence gap spliced between them (`--pause-ms`, default 450ms) — Chatterbox has no built-in pause control, so a whole paragraph sent in one shot comes out as one breathless run-on otherwise.
 2. **Photo → idle-motion video** — by default, [LivePortrait](https://github.com/KwaiVGI/LivePortrait) (Kuaishou, MIT license) animates your still photo with natural head motion and blinking, driven by one of its bundled example clips (only the *motion* is transferred — the driving clip's own appearance/identity never appears in the output). The clip is short, so it's ping-pong looped to match your audio's length.
 3. **Idle-motion video + speech → final video** — [LatentSync](https://github.com/bytedance/LatentSync) (ByteDance, Apache 2.0) lip-syncs that video to the audio, regenerating only the mouth region — everything else (eyes, face shape, the head motion from step 2) is carried through unchanged.
 
@@ -28,7 +28,12 @@ come back to finished `.mp4` files.
     works too via `device="mps"`, just slower.
 - Python 3.10 or 3.11
 - ~16 GB free disk space (model weights across the latentsync/sadtalker
-  engines) — add **~35-40 GB more** if you plan to use `--engine infinitetalk`
+  engines); **+2 GB** for `--tts xtts`, and **+70 GB** for `--engine
+  infinitetalk`
+- **32 GB of system RAM is not enough for `--engine infinitetalk`** without
+  enlarging your pagefile — its model load needs ~56 GB of *commit*, not
+  VRAM. See the `3221225477` entry in Troubleshooting; the other engines are
+  unaffected.
 - [ffmpeg](https://ffmpeg.org/download.html) installed and on your PATH
 - git
 - **Windows only, if using the default engine**: a C++ compiler, needed to
@@ -41,10 +46,20 @@ come back to finished `.mp4` files.
 
 - **A clear, front-facing, well-lit photo of your face** — `photos/me.jpg`.
   Neutral expression, mouth closed, looking at the camera works best.
-- **6–30 seconds of clean audio of your voice** — `voice_samples/me.wav`.
-  Quiet room, no background music/noise, one continuous take, saved as
-  `.wav` or `.mp3`. This is the sample the voice is cloned from — it does
-  *not* need to be in the same language as what you'll generate later.
+- **25–30 seconds of clean audio of your voice** — `voice_samples/me.wav`.
+  Quiet room, no background music/noise, one continuous take, natural
+  speaking tone, saved as `.wav` or `.mp3`. This is the sample the voice is
+  cloned from — it does *not* need to be in the same language as what you'll
+  generate later. 6s is the technical minimum, but the clone gets audibly
+  better up to ~30s, and this one file determines the voice in every video
+  you ever generate; it's worth a second take. Mono or stereo, any sample
+  rate — the pipeline normalizes it.
+- **Optional but high-impact: 15–20 seconds of video of your head not
+  talking** — e.g. `photos/idle_motion.mp4`. Look at the camera, blink
+  naturally, small nods and turns, slight expression shifts, mouth mostly
+  closed. Pass it as `--motion-video`. This replaces the bundled 3-second
+  stock clip that drives your photo's head motion, and it is the single
+  biggest realism improvement available here — see section 6.
 
 ## 3. Setup
 
@@ -127,6 +142,42 @@ skips it if you try).
 You don't need to activate `.venv-wav2lip` yourself — `make_avatar.py`
 calls into it directly as a subprocess.
 
+### XTTS-v2 (optional, `--tts xtts`)
+
+Only needed if Chatterbox's clone of your voice doesn't sound enough like
+you. XTTS-v2 is a different zero-shot cloning model that often matches
+timbre more closely; it's small (~2GB) and fast, so it's a cheap thing to
+try.
+
+```bash
+./setup_xtts.sh
+```
+
+`setup_xtts.sh` will:
+- create a sixth virtual environment (`.venv-xtts`) and install `coqui-tts`
+  (the maintained fork of the archived `coqui-ai/TTS` package — installing
+  plain `TTS` gets you the dead original)
+- download the XTTS-v2 checkpoint (~2GB)
+
+Then compare the two without paying for the slow video step:
+
+```bash
+python make_avatar.py --voice-compare   --voice voice_samples/me.wav --text "One sentence in your own words." --lang en
+```
+
+That writes four `.wav` files to `output/voice_ab/` — Chatterbox with your
+raw clip, Chatterbox with the cleaned clip, Chatterbox at a lower
+`--cfg-weight`, and XTTS — and exits. Listen, pick the one that sounds most
+like you, and use the matching flags for real generation.
+
+**Languages:** XTTS covers 17 of Chatterbox's 23 — it has no Danish, Greek,
+Finnish, Hebrew, Malay, Norwegian, Swedish or Swahili, and adds Czech and
+Hungarian. `make_avatar.py` will tell you if you ask for one it can't do.
+
+**Licensing:** XTTS-v2's *weights* are under the Coqui Public Model License,
+which is non-commercial (the code is MPL-2.0). Chatterbox is MIT throughout.
+If you plan to use the output commercially, stay on Chatterbox.
+
 ### InfiniteTalk (optional, `--engine infinitetalk`)
 
 Only needed if you want situational facial expression (not just lip sync) —
@@ -192,6 +243,13 @@ Chatterbox Multilingual V3 supports: `ar` Arabic, `da` Danish, `de` German,
 
 Use these codes in the `lang` field.
 
+With `--tts xtts` the set is different — 17 languages: `ar` Arabic, `cs`
+Czech, `de` German, `en` English, `es` Spanish, `fr` French, `hi` Hindi,
+`hu` Hungarian, `it` Italian, `ja` Japanese, `ko` Korean, `nl` Dutch, `pl`
+Polish, `pt` Portuguese, `ru` Russian, `tr` Turkish, `zh` Chinese. Danish,
+Greek, Finnish, Hebrew, Malay, Norwegian, Swedish and Swahili are
+Chatterbox-only.
+
 ## 6. Tuning quality
 
 **Speech pacing (all engines)**
@@ -200,6 +258,23 @@ Use these codes in the `lang` field.
   synthesized separately, and spliced back together with this much silence
   between them. Raise it for a more deliberate delivery, lower it for
   brisker pacing.
+
+**Which voice, and what it's cloned from (all engines)** — start here if the
+generated voice doesn't sound like you. In rough order of impact:
+- **The reference clip itself.** No parameter can add what isn't in the
+  sample. 25–30s, quiet room, natural tone, one take. This matters more than
+  every other setting below combined.
+- The clip is cleaned automatically (mono, resampled, silence-trimmed,
+  level-matched) before cloning — `--no-voice-prep` turns that off if you'd
+  rather hand the model your file untouched.
+- `--tts xtts` swaps Chatterbox for XTTS-v2, a different cloning model that
+  often tracks timbre more closely. Needs `./setup_xtts.sh` (section 3).
+- `--voice-compare` renders the same sentence through all of the above into
+  `output/voice_ab/` and exits without making video. Use this to decide —
+  the video step costs minutes, the audio costs seconds.
+- `--keep-intermediates` keeps the synthesized `.wav` (and the driving
+  video) from a real run instead of deleting them, so you can listen to
+  exactly what the video was built from.
 
 **Voice accent & delivery (all engines)**
 - `--cfg-weight` (default 0.5, range 0.0-1.0): if the cloned voice sounds
@@ -217,10 +292,37 @@ Use these codes in the `lang` field.
   can add an accent that isn't in the sample.
 
 **LivePortrait + LatentSync (default engine)**
+- `--motion-video path/to/your_idle_clip.mp4` — **the biggest realism win
+  available.** LatentSync only regenerates the mouth; every other part of
+  the face is carried through from the driving video unchanged. So if the
+  driving video barely moves, you get a frozen face with a moving mouth,
+  which is exactly what "unnatural" usually means here. The bundled default
+  (`d0.mp4`) is a 3.1-second clip that has to be looped ~10x for a normal
+  line, and every clip LivePortrait ships is an *expression demo* — pulled
+  faces, exaggerated eyes — rather than a natural idle. A 15–20s recording
+  of your own head idling fixes both problems at once. See section 2 for
+  how to record it.
+- `--motion-scale` (default 1.0) amplifies the transferred head/expression
+  motion. Try 1.2–1.5 if the motion is there but too subtle to read.
 - `--motion idle` (default): animates the photo with natural head motion
   and blinking before lip-syncing. `--motion none`: skips that and
   lip-syncs a frozen photo instead — use this if idle motion ever
-  introduces visible identity drift on your particular photo.
+  introduces visible identity drift on your particular photo. Note that
+  `--motion none` produces a completely static face by design.
+- `--latentsync-res` (default 256) sets the resolution the mouth region is
+  regenerated at. 512 is available, but the checkpoint this project
+  installs is LatentSync 1.5, which was *trained* at 256 — 512 costs 4x the
+  VRAM and is not reliably sharper with these weights. A/B it rather than
+  assuming it's an upgrade.
+- **Checking whether it actually moved:** `python tools/measure_motion.py
+  output/your_video.mp4` reports frame-to-frame motion energy for the upper
+  face and the mouth separately, plus their **ratio**. The ratio is the
+  number to read: real human video sits around 0.6–0.75, and a ratio near 0
+  means the face is frozen while only the mouth animates — the exact failure
+  this section is about. Pass several files to compare them. The absolute
+  values scale with how much of the frame your face fills, so they're only
+  comparable between videos of the same size; the script warns you when
+  they aren't.
 - `--inference-steps` (default 20, try up to 50): more LatentSync diffusion
   steps ⇒ better quality, slower generation.
 - `--guidance-scale` (default 1.5, range 1.0-3.0): higher ⇒ more accurate
@@ -268,7 +370,9 @@ This creates a synthetic video of a real face speaking words it never said.
 Only use it with your own likeness/voice or with someone's explicit consent.
 Chatterbox embeds an inaudible watermark in generated audio for exactly this
 reason — don't try to strip it, and be transparent with anyone you share the
-videos with about how they were made.
+videos with about how they were made. **XTTS-v2 (`--tts xtts`) does not
+watermark its output**, so if you switch to it that safeguard is gone and
+the transparency is entirely on you.
 
 ## 8. Troubleshooting
 
@@ -322,10 +426,49 @@ videos with about how they were made.
   entry above) and retry `pip install flash_attn==2.7.4.post1` in
   `.venv-infinitetalk` in a new terminal, or run `--engine infinitetalk`
   from WSL2 instead, where wheel availability is much better.
-- **`--engine infinitetalk` runs out of memory or is extremely slow**: this
-  is expected on a 12GB-class GPU even with the defaults (`--infinitetalk-quant
-  fp8`, offloading on) — it's a 14B-parameter model. Try
-  `--infinitetalk-steps 20` for faster (lower-quality) generation, or a
+- **`--engine infinitetalk` dies instantly with exit code `3221225477` and
+  no Python traceback**, right after logging `Creating WanModel from ...`:
+  that code is `0xC0000005`, a native access violation, and it is a
+  **system-RAM/pagefile** problem, not a GPU, CUDA, flash-attn or Windows
+  compatibility problem. `optimum-quanto`'s `requantize()` materializes
+  every parameter of the 14B model as a real bf16 CPU tensor (~28GB) before
+  `load_state_dict` immediately overwrites them with the 19.5GB quantized
+  weights. Peak commit is therefore ~56GB — with T5 and CLIP already
+  resident — *regardless* of `--infinitetalk-quant`, which is why `fp8`,
+  `int8` and `none` all fail identically. Machines with 64GB+ RAM absorb
+  this and never notice.
+
+  The fix is to raise your Windows commit limit. Check it first:
+
+  ```powershell
+  $os = Get-CimInstance Win32_OperatingSystem
+  'CommitLimitMB = ' + [math]::Round($os.TotalVirtualMemorySize/1KB)
+  ```
+
+  If that is under ~60000, set a fixed pagefile large enough, in an
+  **Administrator** PowerShell, then **reboot**:
+
+  ```powershell
+  $cs = Get-CimInstance Win32_ComputerSystem
+  $cs | Set-CimInstance -Property @{AutomaticManagedPagefile=$false}
+  $pf = Get-CimInstance Win32_PageFileSetting -Filter "SettingID='pagefile.sys @ C:'"
+  if ($pf) { $pf | Set-CimInstance -Property @{InitialSize=49152; MaximumSize=49152} }
+  else { New-CimInstance -ClassName Win32_PageFileSetting -Property @{Name='C:\pagefile.sys'; InitialSize=49152; MaximumSize=49152} }
+  ```
+
+  48GB of pagefile on top of 32GB of RAM gives an ~80GB commit limit, with
+  room to spare above the ~56GB peak. It costs ~38GB of disk and is
+  reversible by setting `AutomaticManagedPagefile=$true` and rebooting. A
+  Windows-managed pagefile expands too slowly to survive this particular
+  allocation burst, which is why a fixed size is specified.
+
+  To see the fault for yourself rather than a bare exit code, run
+  `generate_infinitetalk.py` directly with `python -X faulthandler` — the
+  traceback then names `optimum/quanto/quantize.py` in `move_tensor`.
+- **`--engine infinitetalk` runs out of *GPU* memory or is extremely slow**:
+  this is expected on a 12GB-class GPU even with the defaults
+  (`--infinitetalk-quant fp8`, offloading on) — it's a 14B-parameter model.
+  Try `--infinitetalk-steps 20` for faster (lower-quality) generation, or a
   shorter line of text per run.
 - **Model download fails in `setup_infinitetalk.sh`** with a `FileNotFoundError`
   pointing at a path under `.cache\huggingface\download\...`: this is the
