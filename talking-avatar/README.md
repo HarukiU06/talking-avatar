@@ -5,7 +5,9 @@ any text you type, in any of 23 languages. Everything runs locally — no cloud
 service, no per-video cost, your face and voice never leave your computer.
 
 **Pipeline:**
-1. **Text → speech in your voice** — [Chatterbox Multilingual TTS](https://github.com/resemble-ai/chatterbox) (Resemble AI, MIT license) clones your voice from a short reference clip and speaks your text in it. Your reference clip is automatically cleaned up first (downmixed to mono, resampled, silence-trimmed, level-matched) — zero-shot cloning derives your entire voice identity from that one file, so its defects are inherited by every line you generate. If the clone still doesn't sound enough like you, `--tts xtts` swaps in [XTTS-v2](https://github.com/idiap/coqui-ai-TTS), which often matches timbre more closely (17 languages instead of 23 — see section 3), and `--voice-compare` renders the same line through every setting so you can pick by ear. Long, multi-sentence text is split into sentences and synthesized separately with a silence gap spliced between them (`--pause-ms`, default 450ms) — Chatterbox has no built-in pause control, so a whole paragraph sent in one shot comes out as one breathless run-on otherwise.
+1. **Text → speech in your voice** — [Chatterbox Multilingual TTS](https://github.com/resemble-ai/chatterbox) (Resemble AI, MIT license) clones your voice from a short reference clip and speaks your text in it. Your reference clip is automatically cleaned up first (downmixed to mono, resampled, silence-trimmed, level-matched) — zero-shot cloning derives your entire voice identity from that one file, so its defects are inherited by every line you generate. `--tts xtts` swaps in [XTTS-v2](https://github.com/idiap/coqui-ai-TTS) as an alternative (17 languages instead of 23 — see section 3).
+
+   **If the result doesn't sound enough like you, that is expected, and the fix is `--voice-convert`.** Zero-shot cloning has to invent natural delivery *and* imitate a specific person from a few seconds of audio, and it compromises on both — no parameter crosses that gap. `--voice-convert` adds a second stage, [Seed-VC](https://github.com/Plachtaa/seed-vc), which converts the generated speech's timbre to a reference recording of you. The TTS then only has to sound like a person talking, and Seed-VC decides who. `--voice-compare` renders the same line through every combination so you can pick by ear. Long, multi-sentence text is split into sentences and synthesized separately with a silence gap spliced between them (`--pause-ms`, default 450ms) — Chatterbox has no built-in pause control, so a whole paragraph sent in one shot comes out as one breathless run-on otherwise.
 2. **Photo → idle-motion video** — by default, [LivePortrait](https://github.com/KwaiVGI/LivePortrait) (Kuaishou, MIT license) animates your still photo with natural head motion and blinking, driven by one of its bundled example clips (only the *motion* is transferred — the driving clip's own appearance/identity never appears in the output). The clip is short, so it's ping-pong looped to match your audio's length.
 3. **Idle-motion video + speech → final video** — [LatentSync](https://github.com/bytedance/LatentSync) (ByteDance, Apache 2.0) lip-syncs that video to the audio, regenerating only the mouth region — everything else (eyes, face shape, the head motion from step 2) is carried through unchanged.
 
@@ -183,6 +185,36 @@ Hungarian. `make_avatar.py` will tell you if you ask for one it can't do.
 which is non-commercial (the code is MPL-2.0). Chatterbox is MIT throughout.
 If you plan to use the output commercially, stay on Chatterbox.
 
+### Seed-VC (optional but recommended, `--voice-convert`)
+
+The second stage of the voice pipeline, and the thing to install if the
+cloned voice doesn't sound like you. It takes speech that has already been
+generated and converts its speaker identity to a reference recording.
+
+```bash
+./setup_seedvc.sh
+```
+
+`setup_seedvc.sh` clones Seed-VC, creates `.venv-seedvc`, and installs
+PyTorch (CUDA 12.8) plus its dependencies. Model checkpoints download
+automatically on first run. It's light — upstream benchmarks it on an RTX
+3060 Laptop — so it adds little to generation time.
+
+```bash
+python make_avatar.py --photo photos/me.jpg --voice voice_samples/me.wav   --voice-convert --vc-target voice_samples/me_long.wav   --text "..." --lang en --out output/test.mp4
+```
+
+`--vc-target` is the reference Seed-VC converts *towards*, and defaults to
+whatever `--voice` is. It's worth pointing at a longer recording of
+yourself if you have one: it only has to establish who you are, so it can be
+longer and less pristine than the TTS's reference clip.
+
+Why this rather than RVC: RVC needs a per-speaker training run, and on
+RTX 50-series (Blackwell) cards it currently needs CUDA 12.8 plus
+nightly-PyTorch workarounds that are still a moving target. Seed-VC works
+zero-shot with no training, and ships a `train.py` if you later want to
+fine-tune on a longer recording.
+
 ### InfiniteTalk (optional, `--engine infinitetalk`)
 
 Only needed if you want situational facial expression (not just lip sync) —
@@ -258,22 +290,35 @@ Chatterbox-only.
 ## 6. Tuning quality
 
 **Speech pacing (all engines)**
-- `--pause-ms` (default 450): silence inserted between sentences. Chatterbox
-  has no built-in pause control, so long text is split into sentences,
-  synthesized separately, and spliced back together with this much silence
-  between them. Raise it for a more deliberate delivery, lower it for
-  brisker pacing.
+- `--pause-ms` (default 0): at 0, the whole text goes to the TTS in one call
+  and the model places its own pauses — it carries intonation across sentence
+  boundaries, which is most of what makes speech sound like a person rather
+  than a list. Above 0, text is split into sentences, each is synthesized
+  separately, and this much silence is spliced between them. That buys exact
+  pause control at a real cost: every sentence restarts at neutral intonation,
+  and the uniform gaps sound mechanical. Splicing used to be the default here;
+  it was changed after listening tests. Raise it only if a model genuinely
+  runs sentences together.
 
 **Which voice, and what it's cloned from (all engines)** — start here if the
 generated voice doesn't sound like you. In rough order of impact:
+- **`--voice-convert`.** The single biggest lever, and the only one that
+  addresses the actual limitation rather than working around it. Zero-shot
+  cloning must produce natural delivery and imitate you simultaneously, and
+  compromises on both; this splits the job. Needs `./setup_seedvc.sh`
+  (section 3). Pair it with `--vc-target` pointing at the longest clean
+  recording of yourself you have.
 - **The reference clip itself.** No parameter can add what isn't in the
   sample. 25–30s, quiet room, natural tone, one take. This matters more than
-  every other setting below combined.
+  every setting below it.
+- `--pause-ms 0` (now the default) — see "Speech pacing" above. If your audio
+  sounds like disconnected fragments, check you haven't raised this.
 - The clip is cleaned automatically (mono, resampled, silence-trimmed,
   level-matched) before cloning — `--no-voice-prep` turns that off if you'd
   rather hand the model your file untouched.
 - `--tts xtts` swaps Chatterbox for XTTS-v2, a different cloning model that
   often tracks timbre more closely. Needs `./setup_xtts.sh` (section 3).
+- `--vc-steps` (default 25) is Seed-VC's quality/speed dial.
 - `--voice-compare` renders the same sentence through all of the above into
   `output/voice_ab/<clip-name>/` and exits without making video. Use this to
   decide — the video step costs minutes, the audio costs seconds. Run it on

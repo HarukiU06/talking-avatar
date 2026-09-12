@@ -63,6 +63,11 @@ INFINITETALK_VENV = os.environ.get("INFINITETALK_VENV", str(Path(__file__).paren
 # XTTS-v2, the alternative TTS behind --tts xtts. Created by setup_xtts.sh.
 XTTS_VENV = os.environ.get("XTTS_VENV", str(Path(__file__).parent / ".venv-xtts"))
 
+# Seed-VC, the voice-conversion stage behind --voice-convert. Created by
+# setup_seedvc.sh.
+SEEDVC_DIR = os.environ.get("SEEDVC_DIR", str(Path(__file__).parent / "seed-vc"))
+SEEDVC_VENV = os.environ.get("SEEDVC_VENV", str(Path(__file__).parent / ".venv-seedvc"))
+
 # Language codes supported by Chatterbox Multilingual V3 (see README section 5)
 CHATTERBOX_LANGS = {
     "ar", "da", "de", "el", "en", "es", "fi", "fr", "he", "hi", "it", "ja",
@@ -125,16 +130,24 @@ def split_sentences(text: str) -> list:
     return [s for s in sentences if s.strip()]
 
 
-def synthesize_speech(text: str, lang: str, voice_sample: str, out_wav: str, pause_ms: int = 450,
+def synthesize_speech(text: str, lang: str, voice_sample: str, out_wav: str, pause_ms: int = 0,
                        cfg_weight: float = 0.5, exaggeration: float = 0.5,
                        prep_voice: bool = True) -> str:
     """Generate speech audio in the cloned voice, in the given language.
 
-    Chatterbox has no explicit "pause here" control — sent as one big
-    generate() call, a multi-sentence paragraph comes out as one continuous,
-    breathless read with no gap between sentences. Splitting on sentence
-    boundaries and inserting explicit silence between the synthesized clips
-    gives direct control over pacing instead of hoping the model infers it.
+    pause_ms=0 (the default) sends the whole text in one generate() call and
+    lets the model place its own pauses. Anything above 0 restores the older
+    behaviour: split on sentence boundaries, synthesize each separately, and
+    splice that much silence between them.
+
+    Splicing was the original default, on the reasoning that a paragraph sent
+    in one shot reads breathlessly. It buys pause *control* at a real cost:
+    each sentence is generated with no knowledge of the one before it, so
+    intonation resets to neutral at every boundary and the uniform gaps make
+    the result sound like disconnected fragments rather than someone talking.
+    Listener feedback on this project was that the spliced output sounded
+    mechanical, so the default flipped. Raise --pause-ms if a given model
+    genuinely runs sentences together.
 
     cfg_weight=0.5/exaggeration=0.5 are Chatterbox's own defaults and work
     well for most prompts. If the cloned voice keeps the accent of the
@@ -151,10 +164,13 @@ def synthesize_speech(text: str, lang: str, voice_sample: str, out_wav: str, pau
     voice_sample = get_prepared_voice(voice_sample, enabled=prep_voice)
     model = get_tts_model()
 
+    # pause_ms=0 -> one call for the whole text, so the model carries
+    # intonation across sentence boundaries instead of restarting at each.
+    segments = split_sentences(text) if pause_ms > 0 else [text.strip()]
     clips = [
-        model.generate(sentence, language_id=lang, audio_prompt_path=voice_sample,
+        model.generate(segment, language_id=lang, audio_prompt_path=voice_sample,
                        cfg_weight=cfg_weight, exaggeration=exaggeration).squeeze().cpu().numpy()
-        for sentence in split_sentences(text)
+        for segment in segments
     ]
 
     # torchaudio.save() in recent versions requires the separate torchcodec
@@ -210,7 +226,7 @@ def concat_with_pauses(clips: list, sr: int, pause_ms: int) -> np.ndarray:
 
 
 def synthesize_speech_xtts(text: str, lang: str, voice_sample: str, out_wav: str,
-                           pause_ms: int = 450, prep_voice: bool = True) -> str:
+                           pause_ms: int = 0, prep_voice: bool = True) -> str:
     """Generate speech with XTTS-v2 instead of Chatterbox.
 
     Same contract as synthesize_speech(): same sentence splitting, same
@@ -235,7 +251,9 @@ def synthesize_speech_xtts(text: str, lang: str, voice_sample: str, out_wav: str
     job_path = os.path.join(work_dir, "job.json")
     with open(job_path, "w", encoding="utf-8") as fh:
         json.dump({
-            "sentences": split_sentences(text),
+            # See synthesize_speech(): 0 means hand over the whole text and let
+            # the model place its own pauses. XTTS splits internally anyway.
+            "sentences": split_sentences(text) if pause_ms > 0 else [text.strip()],
             "lang": lang,
             "speaker_wav": os.path.abspath(voice_sample),
             "out_dir": work_dir,
@@ -254,8 +272,54 @@ def synthesize_speech_xtts(text: str, lang: str, voice_sample: str, out_wav: str
     return out_wav
 
 
+def convert_voice(source_wav: str, target_voice: str, out_wav: str,
+                  diffusion_steps: int = 25, cfg_rate: float = 0.7,
+                  length_adjust: float = 1.0) -> str:
+    """Replace the speaker identity in `source_wav` with the one in `target_voice`.
+
+    This is the second half of the two-stage voice pipeline. Zero-shot TTS
+    cloning has to produce natural prosody AND imitate a specific person from
+    a few seconds of audio, and it audibly compromises on both. Splitting the
+    job lets the TTS concentrate on sounding like a person talking, and lets
+    a model built for speaker identity handle who that person is.
+
+    Runs in .venv-seedvc as a subprocess, per CLAUDE.md's cross-venv rule.
+    """
+    inference_py = Path(SEEDVC_DIR) / "inference.py"
+    if not inference_py.exists():
+        raise FileNotFoundError(
+            f"Couldn't find Seed-VC at {SEEDVC_DIR}. "
+            "Run setup_seedvc.sh first, or set the SEEDVC_DIR environment variable."
+        )
+
+    python = get_venv_python(SEEDVC_VENV)
+    # inference.py writes into a directory under a name it chooses, rather
+    # than to a path you give it, so point it at a temp dir and move the
+    # result where the caller actually wants it.
+    result_dir = tempfile.mkdtemp(prefix="seedvc_")
+    cmd = [
+        python, "inference.py",
+        "--source", os.path.abspath(source_wav),
+        "--target", os.path.abspath(target_voice),
+        "--output", result_dir,
+        "--diffusion-steps", str(diffusion_steps),
+        "--inference-cfg-rate", str(cfg_rate),
+        "--length-adjust", str(length_adjust),
+    ]
+    print("Running Seed-VC:", " ".join(cmd))
+    try:
+        subprocess.run(cmd, cwd=SEEDVC_DIR, check=True)
+        produced = sorted(Path(result_dir).glob("*.wav"))
+        if not produced:
+            raise RuntimeError("Seed-VC did not produce audio - check the log above.")
+        shutil.move(str(produced[0]), out_wav)
+    finally:
+        shutil.rmtree(result_dir, ignore_errors=True)
+    return out_wav
+
+
 def synthesize(tts: str, text: str, lang: str, voice_sample: str, out_wav: str,
-               pause_ms: int = 450, cfg_weight: float = 0.5,
+               pause_ms: int = 0, cfg_weight: float = 0.5,
                exaggeration: float = 0.5, prep_voice: bool = True) -> str:
     """Dispatch to the selected TTS backend (--tts)."""
     if tts == "xtts":
@@ -266,8 +330,14 @@ def synthesize(tts: str, text: str, lang: str, voice_sample: str, out_wav: str,
                              prep_voice=prep_voice)
 
 
+def _scratch_wav(final_path: str) -> str:
+    """Temp path for a pipeline stage whose output feeds another stage."""
+    return str(Path(final_path).with_suffix(".stage1.wav"))
+
+
 def voice_compare(voice_sample: str, text: str, lang: str,
-                  out_dir: str = None, pause_ms: int = 450) -> None:
+                  out_dir: str = None, pause_ms: int = 0,
+                  vc_target: str = None) -> None:
     """Render the same line through every available voice setting, and stop.
 
     Choosing a voice is a listening decision that needs several candidates
@@ -286,22 +356,45 @@ def voice_compare(voice_sample: str, text: str, lang: str,
 
     variants = [
         # (filename, description, callable)
-        ("chatterbox_raw_cfg0.5.wav",
-         "Chatterbox, reference clip as-is, default settings",
-         lambda f: synthesize_speech(text, lang, voice_sample, f, pause_ms=pause_ms,
-                                     cfg_weight=0.5, prep_voice=False)),
-        ("chatterbox_prepped_cfg0.5.wav",
-         "Chatterbox, cleaned reference clip, default settings",
-         lambda f: synthesize_speech(text, lang, voice_sample, f, pause_ms=pause_ms,
+        ("chatterbox_natural.wav",
+         "Chatterbox, whole text in one pass (current default)",
+         lambda f: synthesize_speech(text, lang, voice_sample, f, pause_ms=0,
                                      cfg_weight=0.5, prep_voice=True)),
-        ("chatterbox_prepped_cfg0.2.wav",
-         "Chatterbox, cleaned clip, low cfg-weight (less accent carry-over)",
-         lambda f: synthesize_speech(text, lang, voice_sample, f, pause_ms=pause_ms,
+        ("chatterbox_spliced450.wav",
+         "Chatterbox, per-sentence + 450ms splices (the old default)",
+         lambda f: synthesize_speech(text, lang, voice_sample, f, pause_ms=450,
+                                     cfg_weight=0.5, prep_voice=True)),
+        ("chatterbox_natural_cfg0.2.wav",
+         "Chatterbox, whole text, low cfg-weight (less accent carry-over)",
+         lambda f: synthesize_speech(text, lang, voice_sample, f, pause_ms=0,
                                      cfg_weight=0.2, prep_voice=True)),
-        ("xtts_prepped.wav",
-         "XTTS-v2, cleaned reference clip",
+        ("chatterbox_raw_reference.wav",
+         "Chatterbox, whole text, reference clip left uncleaned",
+         lambda f: synthesize_speech(text, lang, voice_sample, f, pause_ms=0,
+                                     cfg_weight=0.5, prep_voice=False)),
+        ("xtts_natural.wav",
+         "XTTS-v2, whole text in one pass",
          lambda f: synthesize_speech_xtts(text, lang, voice_sample, f,
-                                          pause_ms=pause_ms, prep_voice=True)),
+                                          pause_ms=0, prep_voice=True)),
+        ("xtts_spliced450.wav",
+         "XTTS-v2, per-sentence + 450ms splices",
+         lambda f: synthesize_speech_xtts(text, lang, voice_sample, f,
+                                          pause_ms=450, prep_voice=True)),
+        # The two-stage contenders. These are the ones that should actually
+        # sound like you; everything above is zero-shot cloning, which has to
+        # invent prosody and identity at once.
+        ("chatterbox_then_seedvc.wav",
+         "Chatterbox, whole text, then Seed-VC conversion to your voice",
+         lambda f: convert_voice(
+             synthesize_speech(text, lang, voice_sample, _scratch_wav(f), pause_ms=0,
+                               cfg_weight=0.5, prep_voice=True),
+             vc_target or voice_sample, f)),
+        ("xtts_then_seedvc.wav",
+         "XTTS-v2, whole text, then Seed-VC conversion to your voice",
+         lambda f: convert_voice(
+             synthesize_speech_xtts(text, lang, voice_sample, _scratch_wav(f),
+                                    pause_ms=0, prep_voice=True),
+             vc_target or voice_sample, f)),
     ]
 
     print()
@@ -316,6 +409,9 @@ def voice_compare(voice_sample: str, text: str, lang: str,
             produced.append((filename, description))
         except Exception as exc:
             print(f"    skipped: {exc}")
+
+    for stage1 in out.glob("*.stage1.wav"):
+        stage1.unlink(missing_ok=True)
 
     print()
     print("Listen to these and pick the one that sounds most like you:")
@@ -845,12 +941,13 @@ def render_infinitetalk(
 
 
 def make_one(photo: str, voice_sample: str, text: str, lang: str, out_video: str,
-             engine: str = "latentsync", pause_ms: int = 450, motion: str = "idle",
+             engine: str = "latentsync", pause_ms: int = 0, motion: str = "idle",
              refine_lipsync_pass: bool = False, cfg_weight: float = 0.5,
              exaggeration: float = 0.5, tts: str = "chatterbox",
              prep_voice: bool = True, motion_video: str = None,
              motion_scale: float = 1.0, keep_intermediates: bool = False,
-             keep_tts_warm: bool = False, **engine_opts) -> None:
+             keep_tts_warm: bool = False, voice_convert: bool = False,
+             vc_target: str = None, vc_steps: int = 25, **engine_opts) -> None:
     kept = []  # intermediates to report instead of delete, when asked
 
     def discard(path: str, label: str) -> None:
@@ -887,6 +984,17 @@ def make_one(photo: str, voice_sample: str, text: str, lang: str, out_video: str
             # every byte of VRAM it can get. run_batch keeps it warm instead,
             # since it synthesizes again for the next line.
             release_tts_model()
+
+        if voice_convert:
+            # Seed-VC's reference can be longer and messier than the TTS
+            # prompt (it only has to establish identity, not be cloned from),
+            # so vc_target defaults to the TTS voice sample but is worth
+            # pointing at a longer recording when one exists.
+            converted = tempfile.NamedTemporaryFile(suffix=".wav", delete=False).name
+            convert_voice(tmp_wav, vc_target or voice_sample, converted,
+                          diffusion_steps=vc_steps)
+            discard(tmp_wav, "TTS speech before voice conversion")
+            tmp_wav = converted
 
         if engine == "sadtalker":
             if refine_lipsync_pass:
@@ -938,12 +1046,13 @@ def make_one(photo: str, voice_sample: str, text: str, lang: str, out_video: str
             print(f"Kept {label}: {path}")
 
 
-def run_batch(config_path: str, engine: str = "latentsync", pause_ms: int = 450,
+def run_batch(config_path: str, engine: str = "latentsync", pause_ms: int = 0,
               motion: str = "idle", refine_lipsync_pass: bool = False,
               cfg_weight: float = 0.5, exaggeration: float = 0.5,
               tts: str = "chatterbox", prep_voice: bool = True,
               motion_video: str = None, motion_scale: float = 1.0,
-              keep_intermediates: bool = False, **engine_opts) -> None:
+              keep_intermediates: bool = False, voice_convert: bool = False,
+              vc_target: str = None, vc_steps: int = 25, **engine_opts) -> None:
     cfg = yaml.safe_load(Path(config_path).read_text())
     photo = cfg["photo"]
     voice_sample = cfg["voice_sample"]
@@ -954,6 +1063,8 @@ def run_batch(config_path: str, engine: str = "latentsync", pause_ms: int = 450,
     cfg_weight = cfg.get("cfg_weight", cfg_weight)
     exaggeration = cfg.get("exaggeration", exaggeration)
     tts = cfg.get("tts", tts)
+    voice_convert = cfg.get("voice_convert", voice_convert)
+    vc_target = cfg.get("vc_target", vc_target)
     motion_video = cfg.get("motion_video", motion_video)
     motion_scale = cfg.get("motion_scale", motion_scale)
     if engine == "infinitetalk" and "scene_prompt" in cfg:
@@ -969,7 +1080,8 @@ def run_batch(config_path: str, engine: str = "latentsync", pause_ms: int = 450,
                  cfg_weight=cfg_weight, exaggeration=exaggeration, tts=tts,
                  prep_voice=prep_voice, motion_video=motion_video,
                  motion_scale=motion_scale, keep_intermediates=keep_intermediates,
-                 keep_tts_warm=True, **engine_opts)
+                 keep_tts_warm=True, voice_convert=voice_convert,
+                 vc_target=vc_target, vc_steps=vc_steps, **engine_opts)
 
     release_tts_model()
 
@@ -996,6 +1108,19 @@ def main():
                         help="Text-to-speech engine. chatterbox (default): 23 languages. "
                              "xtts: XTTS-v2, 17 languages, often clones timbre more "
                              "closely - needs ./setup_xtts.sh")
+    parser.add_argument("--voice-convert", action="store_true",
+                        help="Add a Seed-VC pass after the TTS that converts the generated "
+                             "speech to your voice. Two stages beat zero-shot cloning alone: "
+                             "the TTS handles natural delivery, Seed-VC handles identity. "
+                             "Needs ./setup_seedvc.sh")
+    parser.add_argument("--vc-target",
+                        help="Reference recording for --voice-convert (default: whatever "
+                             "--voice is). Point this at a longer recording of yourself if "
+                             "you have one - it only has to establish identity, so it can be "
+                             "longer and less pristine than the TTS reference")
+    parser.add_argument("--vc-steps", type=int, default=25,
+                        help="Seed-VC diffusion steps (default 25). Higher is cleaner and "
+                             "slower; 30-50 is upstream's suggestion for singing")
     parser.add_argument("--no-voice-prep", action="store_true",
                         help="Use the voice sample exactly as given. By default it is "
                              "downmixed to mono, resampled, silence-trimmed and level-matched "
@@ -1008,10 +1133,12 @@ def main():
                         help="Keep (and print the paths of) the synthesized speech and the "
                              "driving video instead of deleting them - the two files you "
                              "need to diagnose a voice or head-motion problem")
-    parser.add_argument("--pause-ms", type=int, default=450,
-                        help="Silence inserted between sentences, in milliseconds. Chatterbox has no "
-                             "built-in pause control, so long multi-sentence text is spliced from "
-                             "separately-synthesized sentences with this much silence between them")
+    parser.add_argument("--pause-ms", type=int, default=0,
+                        help="0 (default): send the whole text to the TTS in one call and let it "
+                             "place its own pauses, carrying intonation across sentence boundaries. "
+                             "Above 0: split into sentences, synthesize each separately and splice "
+                             "this much silence between them - exact pause control, but every "
+                             "sentence restarts at neutral intonation and it sounds mechanical")
     parser.add_argument("--motion-video",
                         help="[latentsync] Your own 15-20s video of head idling/blinking, used "
                              "to drive the photo instead of LivePortrait's bundled 3s clip. "
@@ -1097,7 +1224,8 @@ def main():
         if not (args.voice and args.text):
             parser.error("--voice-compare needs --voice and --text.")
         try:
-            voice_compare(args.voice, args.text, args.lang, pause_ms=args.pause_ms)
+            voice_compare(args.voice, args.text, args.lang, pause_ms=args.pause_ms,
+                          vc_target=args.vc_target)
         finally:
             cleanup_prepared_voices()
         return
@@ -1133,6 +1261,8 @@ def main():
         exaggeration=args.exaggeration, tts=args.tts,
         prep_voice=not args.no_voice_prep, motion_video=args.motion_video,
         motion_scale=args.motion_scale, keep_intermediates=args.keep_intermediates,
+        voice_convert=args.voice_convert, vc_target=args.vc_target,
+        vc_steps=args.vc_steps,
     )
 
     try:
