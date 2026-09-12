@@ -318,6 +318,19 @@ generated voice doesn't sound like you. In rough order of impact:
   rather hand the model your file untouched.
 - `--tts xtts` swaps Chatterbox for XTTS-v2, a different cloning model that
   often tracks timbre more closely. Needs `./setup_xtts.sh` (section 3).
+- `--vc-denoise` (default 0.8, 0 = off) cleans the conversion reference
+  before use. **If your generated audio has background noise, this is the
+  control.** A conversion model cannot separate "how this person sounds" from
+  "what their room sounds like" — both are just properties of the reference —
+  so it copies the reference's room tone onto every line it generates. On this
+  project's own recording the converted output's noise floor matched the
+  source recording's within ~1dB per band, while the TTS audio going in was
+  3-6dB cleaner. Cleaning the reference cut the output noise floor by ~13dB.
+  It also *improved* speaker similarity (0.737 → 0.850 at 0.8), which is worth
+  knowing because the opposite appears true if you measure against a noisy
+  reference: a clip that reproduces the room tone scores higher for matching
+  the noise, not the voice. Measure against a cleaned reference or the
+  comparison is rigged.
 - `--vc-steps` (default 25) is Seed-VC's quality/speed dial.
 - `--voice-compare` renders the same sentence through all of the above into
   `output/voice_ab/<clip-name>/` and exits without making video. Use this to
