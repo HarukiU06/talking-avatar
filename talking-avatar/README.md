@@ -165,10 +165,15 @@ Then compare the two without paying for the slow video step:
 python make_avatar.py --voice-compare   --voice voice_samples/me.wav --text "One sentence in your own words." --lang en
 ```
 
-That writes four `.wav` files to `output/voice_ab/` — Chatterbox with your
-raw clip, Chatterbox with the cleaned clip, Chatterbox at a lower
-`--cfg-weight`, and XTTS — and exits. Listen, pick the one that sounds most
-like you, and use the matching flags for real generation.
+That writes four `.wav` files to `output/voice_ab/<your-clip-name>/` —
+Chatterbox with your raw clip, Chatterbox with the cleaned clip, Chatterbox
+at a lower `--cfg-weight`, and XTTS — and exits. Listen, pick the one that
+sounds most like you, and use the matching flags for real generation.
+
+Results are filed under the reference clip's name, so you can run this
+against two different recordings of yourself and compare those too — often
+the more useful comparison, since the reference clip matters more than any
+setting.
 
 **Languages:** XTTS covers 17 of Chatterbox's 23 — it has no Danish, Greek,
 Finnish, Hebrew, Malay, Norwegian, Swedish or Swahili, and adds Czech and
@@ -270,8 +275,9 @@ generated voice doesn't sound like you. In rough order of impact:
 - `--tts xtts` swaps Chatterbox for XTTS-v2, a different cloning model that
   often tracks timbre more closely. Needs `./setup_xtts.sh` (section 3).
 - `--voice-compare` renders the same sentence through all of the above into
-  `output/voice_ab/` and exits without making video. Use this to decide —
-  the video step costs minutes, the audio costs seconds.
+  `output/voice_ab/<clip-name>/` and exits without making video. Use this to
+  decide — the video step costs minutes, the audio costs seconds. Run it on
+  two different recordings to compare those as well.
 - `--keep-intermediates` keeps the synthesized `.wav` (and the driving
   video) from a real run instead of deleting them, so you can listen to
   exactly what the video was built from.
@@ -296,14 +302,27 @@ generated voice doesn't sound like you. In rough order of impact:
   available.** LatentSync only regenerates the mouth; every other part of
   the face is carried through from the driving video unchanged. So if the
   driving video barely moves, you get a frozen face with a moving mouth,
-  which is exactly what "unnatural" usually means here. The bundled default
-  (`d0.mp4`) is a 3.1-second clip that has to be looped ~10x for a normal
-  line, and every clip LivePortrait ships is an *expression demo* — pulled
-  faces, exaggerated eyes — rather than a natural idle. A 15–20s recording
-  of your own head idling fixes both problems at once. See section 2 for
-  how to record it.
-- `--motion-scale` (default 1.0) amplifies the transferred head/expression
-  motion. Try 1.2–1.5 if the motion is there but too subtle to read.
+  which is exactly what "unnatural" usually means here.
+
+  The bundled default (`d0.mp4`) is wrong for this in two ways. It is 3.1
+  seconds long, so it gets ping-pong looped ~10x for a normal line, which
+  reads as robotic repetition. And every clip LivePortrait ships is an
+  *expression demo* — the driver in `d0` grins broadly, so **your avatar
+  grins broadly too, through whatever you typed.** LivePortrait transfers
+  expression and head pose together; it cannot take the motion and leave the
+  emotion. If your avatar looks like it's smiling through a serious line,
+  this is why, and no parameter fixes it — only a different driving clip
+  does. A 15–20s recording of your own head idling, with the expression you
+  actually want, fixes all of it. See section 2 for how to record one.
+- `--motion-scale` (default 1.0) amplifies the transferred motion.
+  **Use sparingly.** It reliably increases movement (measured +43% and +48%
+  upper-face motion at 1.5 on two different photos), but it amplifies the
+  *deviation from your source photo*, not just the movement — at 1.5 the
+  face shape, eye shape and smile visibly drift away from your actual face.
+  It buys motion by spending likeness. Reach for a better driving clip
+  first; use 1.1–1.2 only if the motion is genuinely too subtle after that,
+  and check the result against your photo rather than trusting the motion
+  numbers, which cannot see identity drift.
 - `--motion idle` (default): animates the photo with natural head motion
   and blinking before lip-syncing. `--motion none`: skips that and
   lip-syncs a frozen photo instead — use this if idle motion ever

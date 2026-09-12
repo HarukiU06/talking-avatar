@@ -267,7 +267,7 @@ def synthesize(tts: str, text: str, lang: str, voice_sample: str, out_wav: str,
 
 
 def voice_compare(voice_sample: str, text: str, lang: str,
-                  out_dir: str = "output/voice_ab", pause_ms: int = 450) -> None:
+                  out_dir: str = None, pause_ms: int = 450) -> None:
     """Render the same line through every available voice setting, and stop.
 
     Choosing a voice is a listening decision that needs several candidates
@@ -275,8 +275,13 @@ def voice_compare(voice_sample: str, text: str, lang: str,
     costs seconds — so there is no reason to render video while deciding.
     Variants that can't run (XTTS not installed, or not supporting this
     language) are skipped with a note rather than aborting the rest.
+
+    Results go under a subdirectory named after the reference clip, because
+    the other comparison worth making is between two different reference
+    recordings — and a single shared output directory silently overwrites
+    the first one's results when you try.
     """
-    out = Path(out_dir)
+    out = Path(out_dir) if out_dir else Path("output/voice_ab") / Path(voice_sample).stem
     out.mkdir(parents=True, exist_ok=True)
 
     variants = [
@@ -997,8 +1002,8 @@ def main():
                              "first, which usually improves the clone noticeably")
     parser.add_argument("--voice-compare", action="store_true",
                         help="Generate the same line with every voice setting into "
-                             "output/voice_ab/ and exit without rendering video - use this "
-                             "to pick a voice before paying for the slow video step")
+                             "output/voice_ab/<clip-name>/ and exit without rendering video - "
+                             "use this to pick a voice before paying for the slow video step")
     parser.add_argument("--keep-intermediates", action="store_true",
                         help="Keep (and print the paths of) the synthesized speech and the "
                              "driving video instead of deleting them - the two files you "
@@ -1013,9 +1018,10 @@ def main():
                              "Biggest realism win available: real motion, and long enough to "
                              "need almost no looping")
     parser.add_argument("--motion-scale", type=float, default=1.0,
-                        help="[latentsync] Amplify transferred head/expression motion "
-                             "(LivePortrait's driving_multiplier). Try 1.2-1.5 if the head "
-                             "moves too subtly")
+                        help="[latentsync] Amplify transferred motion (LivePortrait's "
+                             "driving_multiplier). Use sparingly: it amplifies the deviation "
+                             "from your source photo, so past ~1.2 the face visibly stops "
+                             "looking like you. Prefer a better --motion-video")
     parser.add_argument("--motion", default="idle", choices=["idle", "none"],
                         help="[latentsync] idle (default): animate the photo with natural head "
                              "motion/blinking via LivePortrait before lip-syncing, instead of a "
