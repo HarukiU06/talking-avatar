@@ -21,3 +21,9 @@ talking-avatar/config.yaml
 
 __pycache__/
 *.pyc
+
+# Not shown on GitHub
+CLAUDE.md
+talking-avatar/CLAUDE.md
+.claude/
+talking-avatar/.claude/
