@@ -738,6 +738,47 @@ def make_looped_video(photo: str, duration_s: float, fps: int = 25) -> str:
     return out
 
 
+def detect_border_crop(video: str, sample_frames: int = 300) -> str:
+    """ffmpeg crop filter that removes uniform black borders, or "" if none.
+
+    Phone recordings are routinely portrait content stored in a landscape
+    frame (or the reverse), padded with black bars. Those bars are pure cost:
+    they consume most of the width, and since the clip is then downscaled to
+    fit LatentSync's memory budget, they shrink the face — the only part that
+    matters — by the same factor. Stripping them first spends the whole
+    resolution budget on the subject.
+
+    Observed on this project's own test footage: a 1280x720 file whose actual
+    content was 404x720, i.e. two thirds of every frame was black.
+    """
+    result = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-i", os.path.abspath(video),
+         "-vf", "cropdetect=24:2:0", "-frames:v", str(sample_frames), "-f", "null", "-"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    crops = re.findall(r"crop=(\d+):(\d+):(\d+):(\d+)", result.stderr or "")
+    if not crops:
+        return ""
+
+    # cropdetect reports per frame; take the most common verdict rather than
+    # the last, so one dark frame can't decide the crop for the whole clip.
+    from collections import Counter
+    w, h, x, y = Counter(crops).most_common(1)[0][0]
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x",
+         os.path.abspath(video)],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip().splitlines()[0]
+    full_w, full_h = (int(v) for v in probe.split("x"))
+
+    # Ignore a crop that barely changes anything; only act on real bars.
+    if int(w) >= full_w * 0.95 and int(h) >= full_h * 0.95:
+        return ""
+    print(f"Source video: cropping black borders {full_w}x{full_h} -> {w}x{h}")
+    return f"crop={w}:{h}:{x}:{y}"
+
+
 def fit_source_video(video: str, duration_s: float, max_dim: int = 768) -> str:
     """Prepare a real recording of the speaker to be lip-synced directly.
 
@@ -760,7 +801,9 @@ def fit_source_video(video: str, duration_s: float, max_dim: int = 768) -> str:
         raise FileNotFoundError(f"Source video not found: {video}")
 
     clip_duration = _video_duration(video)
-    scale = (f"scale='min({max_dim},iw)':'min({max_dim},ih)'"
+    crop = detect_border_crop(video)
+    scale = ((crop + "," if crop else "") +
+             f"scale='min({max_dim},iw)':'min({max_dim},ih)'"
              ":force_original_aspect_ratio=decrease,"
              "scale=trunc(iw/2)*2:trunc(ih/2)*2")
 

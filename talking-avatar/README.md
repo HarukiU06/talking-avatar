@@ -68,9 +68,26 @@ come back to finished `.mp4` files.
   own motion, blinks and expression are already there and only the mouth is
   re-synced. Nothing is invented, so nothing repeats.
 
-  Two practical notes: record longer than your typical line so no looping is
-  needed at all, and wear the expression you want the avatar to have — with
-  `--engine latentsync` the expression is carried through unchanged.
+  How to record it, in rough order of importance:
+  - **Fill the frame with your head and shoulders.** Only the face region is
+    actually used, so anything else is resolution thrown away. The clip is
+    downscaled to 768px to fit in memory, and whatever fraction of the frame
+    your face occupies is the fraction of that budget it gets.
+  - **Don't let the camera letterbox it.** Phone video shot in one
+    orientation and saved in the other arrives padded with black bars — one
+    real example here was a 1280x720 file whose actual content was 404x720,
+    two thirds of every frame black. The bars are detected and cropped
+    automatically, but the pixels are already gone by then. Record in the
+    orientation you intend to keep.
+  - **Mouth closed, or nearly.** The mouth is the one region that gets
+    replaced, and an original mouth that is already moving fights the new
+    lip-sync.
+  - **Longer than your typical line**, so no looping is needed at all.
+  - **Wear the expression you want the avatar to have** — with
+    `--engine latentsync` the expression passes through unchanged.
+  - Even, front-on lighting; plain background; camera at eye level; hold
+    reasonably still (small natural movement is the point, large movement is
+    not).
 
 ## 3. Setup
 

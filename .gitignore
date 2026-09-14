@@ -8,6 +8,7 @@ talking-avatar/LatentSync/
 talking-avatar/LivePortrait/
 talking-avatar/Wav2Lip/
 talking-avatar/InfiniteTalk/
+talking-avatar/seed-vc/
 
 # Downloaded model weights (fetched by setup.sh's GFPGAN install step)
 talking-avatar/gfpgan/
