@@ -1,29 +1,29 @@
 # Python virtual environments (created by setup*.sh)
-talking-avatar/.venv/
-talking-avatar/.venv-*/
+.venv/
+.venv-*/
 
 # Vendored third-party model repos (cloned by setup*.sh)
-talking-avatar/SadTalker/
-talking-avatar/LatentSync/
-talking-avatar/LivePortrait/
-talking-avatar/Wav2Lip/
-talking-avatar/InfiniteTalk/
-talking-avatar/seed-vc/
+SadTalker/
+LatentSync/
+LivePortrait/
+Wav2Lip/
+InfiniteTalk/
+seed-vc/
 
 # Downloaded model weights (fetched by setup.sh's GFPGAN install step)
-talking-avatar/gfpgan/
+gfpgan/
 
 # User-specific inputs/outputs and local config
-talking-avatar/photos/
-talking-avatar/voice_samples/
-talking-avatar/output/
-talking-avatar/config.yaml
+photos/
+voice_samples/
+output/
+config.yaml
 
 __pycache__/
 *.pyc
 
 
 CLAUDE.md
-talking-avatar/CLAUDE.md
+CLAUDE.md
 .claude/
-talking-avatar/.claude/
+.claude/
