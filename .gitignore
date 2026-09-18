@@ -22,8 +22,5 @@ config.yaml
 __pycache__/
 *.pyc
 
-
 CLAUDE.md
-CLAUDE.md
-.claude/
 .claude/
