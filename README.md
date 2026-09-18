@@ -32,10 +32,10 @@ come back to finished `.mp4` files.
 - ~16 GB free disk space (model weights across the latentsync/sadtalker
   engines); **+2 GB** for `--tts xtts`, and **+70 GB** for `--engine
   infinitetalk`
-- **32 GB of system RAM is not enough for `--engine infinitetalk`** without
-  enlarging your pagefile — its model load needs ~56 GB of *commit*, not
-  VRAM. See the `3221225477` entry in Troubleshooting; the other engines are
-  unaffected.
+- **32 GB of system RAM is the floor for `--engine infinitetalk`**, and it is
+  tight: the quantized 14B model is streamed from system RAM on every
+  diffusion step (~18 GB resident), so close memory-hungry apps first. The
+  other engines are unaffected.
 - [ffmpeg](https://ffmpeg.org/download.html) installed and on your PATH
 - git
 - **Windows only, if using the default engine**: a C++ compiler, needed to
@@ -264,14 +264,26 @@ see the pipeline description above. Skip this entirely if `latentsync` or
   `pip install flash_attn==2.7.4.post1` inside `.venv-infinitetalk` afterward.
 - download ~35-40GB of checkpoints: the Wan2.1-I2V-14B-480P base model, the
   chinese-wav2vec2-base audio encoder, and InfiniteTalk's own adapter
-  weights (including the FP8-quantized model this project uses by default
-  to fit a 12GB-class GPU)
+  weights (including the FP8-quantized DiT and T5 this project uses by
+  default to fit a 12GB-class GPU)
 
 You don't need to activate `.venv-infinitetalk` yourself — `make_avatar.py`
-calls into it directly as a subprocess. Expect generation to be
-significantly slower than `latentsync`/`sadtalker` — it's a 14B-parameter
-model running quantized with CPU offload on a 12GB-class GPU; that's a
-deliberate quality-over-speed tradeoff, not a bug.
+calls into it directly as a subprocess. That subprocess is
+`infinitetalk_run.py` (part of this repo), not InfiniteTalk's own
+`generate_infinitetalk.py`: it applies a set of runtime patches (Windows
+memory behaviour, transformers 5, RTX 50-series kernels, GPU memory
+management) and then hands every argument through. Nothing inside the
+`InfiniteTalk/` checkout is modified, so it survives a re-clone; the file's
+docstring explains each patch. Expect generation to be *much* slower than
+`latentsync`/`sadtalker` — on a 12GB laptop GPU (RTX 5070 Ti) with 32GB
+RAM, one 81-frame (3.2s) chunk at 480p costs about 2.5 minutes per
+diffusion step (three DiT passes of ~48s each, for classifier-free
+guidance), so the default 40 steps is roughly 1.5 hours per chunk, plus a
+~40s VAE decode, and `--infinitetalk-mode streaming` chains one chunk per
+~2.9s of audio. It's a 14B-parameter video model running quantized with
+CPU offload; that's a deliberate quality-over-speed tradeoff, not a bug.
+Start with `--infinitetalk-steps 8` (about 20 minutes per chunk) to check
+that a photo and prompt work before committing to a long run.
 
 ## 4. Usage
 
@@ -472,11 +484,18 @@ generated voice doesn't sound like you. In rough order of impact:
 - `--infinitetalk-steps` (default 40): more diffusion steps ⇒ better
   quality, slower.
 - `--infinitetalk-quant {fp8,none}` (default `fp8`): keep this on unless you
-  have considerably more than 12GB VRAM to spare.
+  have considerably more than 12GB VRAM to spare. (`none` also needs the
+  ~32GB of Wan2.1 diffusion shards, which `setup_infinitetalk.sh` downloads;
+  they can be deleted from `InfiniteTalk/weights/Wan2.1-I2V-14B-480P/` if
+  you only ever use `fp8`.)
 - `--infinitetalk-no-low-vram`: disables CPU offloading — only useful if you
   have VRAM to spare; leave the default (offloading on) otherwise.
 - No effect from `--refine-lipsync` here — InfiniteTalk's own audio-driven
   mouth generation is already higher-fidelity than Wav2Lip's patch.
+- Lines shorter than about 3.3s of speech are padded with silence before
+  hand-off (InfiniteTalk refuses audio shorter than one 81-frame chunk) and
+  the video is trimmed back to the speech afterwards; you'll see a
+  `Padding ...` line when this happens.
 
 ## 7. A note on responsible use
 
@@ -542,48 +561,40 @@ the transparency is entirely on you.
   from WSL2 instead, where wheel availability is much better.
 - **`--engine infinitetalk` dies instantly with exit code `3221225477` and
   no Python traceback**, right after logging `Creating WanModel from ...`:
-  that code is `0xC0000005`, a native access violation, and it is a
-  **system-RAM/pagefile** problem, not a GPU, CUDA, flash-attn or Windows
-  compatibility problem. `optimum-quanto`'s `requantize()` materializes
-  every parameter of the 14B model as a real bf16 CPU tensor (~28GB) before
-  `load_state_dict` immediately overwrites them with the 19.5GB quantized
-  weights. Peak commit is therefore ~56GB — with T5 and CLIP already
-  resident — *regardless* of `--infinitetalk-quant`, which is why `fp8`,
-  `int8` and `none` all fail identically. Machines with 64GB+ RAM absorb
-  this and never notice.
-
-  The fix is to raise your Windows commit limit. Check it first:
-
-  ```powershell
-  $os = Get-CimInstance Win32_OperatingSystem
-  'CommitLimitMB = ' + [math]::Round($os.TotalVirtualMemorySize/1KB)
-  ```
-
-  If that is under ~60000, set a fixed pagefile large enough, in an
-  **Administrator** PowerShell, then **reboot**:
-
-  ```powershell
-  $cs = Get-CimInstance Win32_ComputerSystem
-  $cs | Set-CimInstance -Property @{AutomaticManagedPagefile=$false}
-  $pf = Get-CimInstance Win32_PageFileSetting -Filter "SettingID='pagefile.sys @ C:'"
-  if ($pf) { $pf | Set-CimInstance -Property @{InitialSize=49152; MaximumSize=49152} }
-  else { New-CimInstance -ClassName Win32_PageFileSetting -Property @{Name='C:\pagefile.sys'; InitialSize=49152; MaximumSize=49152} }
-  ```
-
-  48GB of pagefile on top of 32GB of RAM gives an ~80GB commit limit, with
-  room to spare above the ~56GB peak. It costs ~38GB of disk and is
-  reversible by setting `AutomaticManagedPagefile=$true` and rebooting. A
-  Windows-managed pagefile expands too slowly to survive this particular
-  allocation burst, which is why a fixed size is specified.
-
-  To see the fault for yourself rather than a bare exit code, run
-  `generate_infinitetalk.py` directly with `python -X faulthandler` — the
-  traceback then names `optimum/quanto/quantize.py` in `move_tensor`.
-- **`--engine infinitetalk` runs out of *GPU* memory or is extremely slow**:
-  this is expected on a 12GB-class GPU even with the defaults
-  (`--infinitetalk-quant fp8`, offloading on) — it's a 14B-parameter model.
-  Try `--infinitetalk-steps 20` for faster (lower-quality) generation, or a
-  shorter line of text per run.
+  that code is `0xC0000005`, a native access violation from running out of
+  Windows *commit* (RAM + pagefile), not a GPU/CUDA/flash-attn problem.
+  Upstream loads its quantized checkpoint through `optimum-quanto`'s
+  `requantize()`, which first materializes every parameter of the 18.9B
+  fp32 placeholder model (~75GB) before overwriting it with the 19.5GB of
+  fp8 weights; Linux overcommits that, Windows charges it up front.
+  `infinitetalk_run.py` replaces that loader, so this should no longer
+  happen when running through `make_avatar.py`. If you see it anyway, you
+  are probably invoking `generate_infinitetalk.py` directly — go through
+  `make_avatar.py`, or run `infinitetalk_run.py` with the same arguments
+  from inside `InfiniteTalk/`. To see the fault as a traceback rather than a
+  bare exit code, add `python -X faulthandler`.
+- **`--engine infinitetalk` takes many minutes per diffusion step (progress
+  bar shows 300+ `s/it`) instead of under a minute**: on a 12GB-class card
+  the whole run sits within a gigabyte of the VRAM limit, and recent NVIDIA
+  Windows drivers default to *"CUDA - Sysmem Fallback Policy: Prefer Sysmem
+  Fallback"*, which silently moves anything that doesn't fit into system
+  RAM at PCIe speed instead of failing. `infinitetalk_run.py` caps PyTorch's
+  allocations just below the free VRAM at startup so this doesn't happen,
+  but that cap is computed from what is free *when the run starts*: close
+  other GPU-using apps (browsers with hardware acceleration, games, other
+  model runs) before launching. Setting the driver policy to *"Prefer No
+  Sysmem Fallback"* in the NVIDIA Control Panel (Manage 3D settings) turns
+  any remaining overflow into an explicit out-of-memory error, which is
+  the better failure. System RAM matters too: with 32GB, the ~18GB of
+  streamed weights plus everything else leaves little headroom, and paging
+  shows up the same way.
+- **`--engine infinitetalk` reports `CUDA out of memory`**: the 480p forward
+  pass peaks at ~7.4GB and the final VAE decode needs ~8.2GB on its own, so
+  a 12GB card has essentially no slack. Make sure nothing else is using the
+  GPU, try a shorter line of text, or drop `--infinitetalk-steps`. If only
+  the VAE decode fails, `infinitetalk_run.py` retries it on the CPU
+  automatically (about 5 minutes per 81-frame chunk on a 16-thread CPU)
+  rather than discarding the sampled clip.
 - **Model download fails in `setup_infinitetalk.sh`** with a `FileNotFoundError`
   pointing at a path under `.cache\huggingface\download\...`: this is the
   same Windows `MAX_PATH` issue as the `flash_attn` entry above, hit via

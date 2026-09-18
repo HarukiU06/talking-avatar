@@ -59,6 +59,9 @@ WAV2LIP_VENV = os.environ.get("WAV2LIP_VENV", str(Path(__file__).parent / ".venv
 # make_idle_motion_video.
 INFINITETALK_DIR = os.environ.get("INFINITETALK_DIR", str(Path(__file__).parent / "InfiniteTalk"))
 INFINITETALK_VENV = os.environ.get("INFINITETALK_VENV", str(Path(__file__).parent / ".venv-infinitetalk"))
+# One InfiniteTalk chunk is 81 frames at 25 fps (3.24s); it needs strictly more
+# audio than that. See render_infinitetalk().
+INFINITETALK_MIN_AUDIO_S = 3.4
 
 # XTTS-v2, the alternative TTS behind --tts xtts. Created by setup_xtts.sh.
 XTTS_VENV = os.environ.get("XTTS_VENV", str(Path(__file__).parent / ".venv-xtts"))
@@ -1061,8 +1064,15 @@ def render_infinitetalk(
     `quant="fp8"` + `low_vram=True` (both on by default) trade speed for
     fitting this 14B-parameter model into a 12GB-class GPU — expect this to
     be noticeably slower than sadtalker/latentsync.
+
+    The subprocess runs infinitetalk_run.py (ours) rather than InfiniteTalk's
+    generate_infinitetalk.py directly: it applies a set of measured runtime
+    patches (Windows commit-limit loader, transformers 5 and Python 3.11
+    drift, RTX 50-series kernels, GPU allocator cap, lazy T5/CLIP) and then
+    hands every argument through unchanged. See that file for the details.
     """
     inference_py = Path(INFINITETALK_DIR) / "generate_infinitetalk.py"
+    worker = Path(__file__).parent / "infinitetalk_run.py"
     ckpt_dir = Path(INFINITETALK_DIR) / "weights" / "Wan2.1-I2V-14B-480P"
     wav2vec_dir = Path(INFINITETALK_DIR) / "weights" / "chinese-wav2vec2-base"
     infinitetalk_dir = Path(INFINITETALK_DIR) / "weights" / "InfiniteTalk" / "single" / "infinitetalk.safetensors"
@@ -1083,13 +1093,33 @@ def render_infinitetalk(
     out = Path(out_video).resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
 
+    # InfiniteTalk refuses audio that isn't longer than one 81-frame chunk
+    # (3.24s at 25 fps): wan/multitalk.py silently drops any embedding with
+    # <= 81 frames and then asserts. Short lines are normal here, so pad with
+    # silence to just over a chunk and trim the video back afterwards.
+    speech_s = sf.info(audio).duration
+    padded_audio = None
+    if speech_s < INFINITETALK_MIN_AUDIO_S:
+        data, sr = sf.read(audio, always_2d=True)
+        pad = np.zeros((int((INFINITETALK_MIN_AUDIO_S - speech_s) * sr) + 1, data.shape[1]), dtype=data.dtype)
+        padded_audio = tempfile.NamedTemporaryFile(suffix=".wav", delete=False).name
+        sf.write(padded_audio, np.concatenate([data, pad]), sr)
+        print(f"Padding {speech_s:.2f}s of speech with silence to {INFINITETALK_MIN_AUDIO_S}s - "
+              "InfiniteTalk needs more than one 81-frame chunk of audio; the video is trimmed back.",
+              flush=True)
+        audio = padded_audio
+
     # InfiniteTalk takes its inputs as a JSON file, not individual CLI flags
     # for photo/audio — schema per its examples/single_example_image.json.
+    # Paths go in with forward slashes: generate_infinitetalk.py derives a
+    # scratch-directory name from cond_video with split('/'), which on a
+    # backslashed Windows path yields the whole path and lands that scratch
+    # directory next to the photo instead of under --audio_save_dir.
     input_json = tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w", encoding="utf-8")
     json.dump({
         "prompt": scene_prompt,
-        "cond_video": os.path.abspath(photo),
-        "cond_audio": {"person1": os.path.abspath(audio)},
+        "cond_video": Path(photo).resolve().as_posix(),
+        "cond_audio": {"person1": Path(audio).resolve().as_posix()},
     }, input_json)
     input_json.close()
 
@@ -1098,19 +1128,24 @@ def render_infinitetalk(
     save_stem = tempfile.NamedTemporaryFile(suffix="", delete=False).name
     os.remove(save_stem)  # only need a unique name, not the empty file itself
 
+    # Its audio embeddings and resampled wav would otherwise accumulate under
+    # InfiniteTalk/save_audio/ across runs.
+    audio_scratch = tempfile.mkdtemp(prefix="infinitetalk_audio_")
+
     cmd = [
-        python, "generate_infinitetalk.py",
+        python, str(worker),
         "--ckpt_dir", str(ckpt_dir),
         "--wav2vec_dir", str(wav2vec_dir),
         "--infinitetalk_dir", str(infinitetalk_dir),
         "--input_json", input_json.name,
+        "--audio_save_dir", audio_scratch,
         "--size", f"infinitetalk-{size}",
         "--sample_steps", str(sample_steps),
         "--mode", mode,
         "--motion_frame", "9",
         "--save_file", save_stem,
     ]
-    if quant in ("fp8", "int8"):
+    if quant == "fp8":
         cmd += ["--quant", quant, "--quant_dir", str(quant_dir)]
     if low_vram:
         cmd += ["--num_persistent_param_in_dit", "0"]
@@ -1120,10 +1155,20 @@ def render_infinitetalk(
         subprocess.run(cmd, cwd=INFINITETALK_DIR, check=True)
     finally:
         os.remove(input_json.name)
+        shutil.rmtree(audio_scratch, ignore_errors=True)
+        if padded_audio:
+            os.remove(padded_audio)
 
     produced = Path(f"{save_stem}.mp4")
     if not produced.exists():
         raise RuntimeError("InfiniteTalk did not produce a video - check the log above.")
+    if padded_audio:
+        # A prefix cut needs no re-encode: every packet before -t is decodable.
+        trimmed = f"{save_stem}-trimmed.mp4"
+        subprocess.run(["ffmpeg", "-y", "-i", str(produced), "-t", f"{speech_s:.3f}", "-c", "copy", trimmed],
+                       check=True, capture_output=True)
+        os.remove(produced)
+        produced = Path(trimmed)
     shutil.move(str(produced), out)
     print(f"Saved video -> {out}")
 
@@ -1433,10 +1478,12 @@ def main():
     parser.add_argument("--infinitetalk-steps", type=int, default=40,
                         help="[infinitetalk] Diffusion sample steps (default 40). Higher = better "
                              "quality, slower")
-    parser.add_argument("--infinitetalk-quant", default="fp8", choices=["fp8", "int8", "none"],
+    parser.add_argument("--infinitetalk-quant", default="fp8", choices=["fp8", "none"],
                         help="[infinitetalk] fp8 (default): quantized model, needed to fit a "
-                             "12GB-class GPU. int8: alternate quantization, try this if fp8 crashes "
-                             "on your GPU. none: full precision, needs significantly more VRAM")
+                             "12GB-class GPU. none: full precision, needs significantly more VRAM "
+                             "and the ~32GB of Wan2.1 diffusion shards setup_infinitetalk.sh "
+                             "downloads. (InfiniteTalk also publishes an int8 DiT, but no int8 "
+                             "T5 to go with it, so it can't be loaded as-is.)")
     parser.add_argument("--infinitetalk-no-low-vram", action="store_true",
                         help="[infinitetalk] Disable CPU offloading (--num_persistent_param_in_dit "
                              "0 is on by default for 12GB-class GPUs) - only if you have VRAM to spare")

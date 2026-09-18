@@ -172,7 +172,11 @@ app()
 }
 hf_download Wan-AI/Wan2.1-I2V-14B-480P weights/Wan2.1-I2V-14B-480P
 hf_download TencentGameMate/chinese-wav2vec2-base weights/chinese-wav2vec2-base
-hf_download MeiGen-AI/InfiniteTalk weights/InfiniteTalk "single/*" "quant_models/infinitetalk_single_fp8*"
+# The quantized DiT needs the matching quantized T5 encoder alongside it
+# (t5_fp8.safetensors + t5_map_fp8.json, ~6.7GB) - wan/modules/t5.py loads
+# it from the same quant_models directory and fails without it. Upstream only
+# publishes the fp8 T5, which is why make_avatar.py offers no int8 option.
+hf_download MeiGen-AI/InfiniteTalk weights/InfiniteTalk "single/*" "quant_models/infinitetalk_single_fp8*" "quant_models/t5_fp8*" "quant_models/t5_map_fp8*"
 
 cd ..
 
@@ -184,3 +188,7 @@ else
   echo "Its venv: source .venv-infinitetalk/Scripts/activate"
 fi
 echo "If flash_attn failed above, resolve that before using --engine infinitetalk."
+echo "make_avatar.py drives this checkout through infinitetalk_run.py, which"
+echo "applies several runtime patches (Windows commit-limit loader, transformers 5,"
+echo "RTX 50-series kernels, GPU memory cap) - nothing inside InfiniteTalk/ itself"
+echo "is modified, so re-cloning it is always safe."
