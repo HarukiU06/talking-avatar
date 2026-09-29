@@ -57,6 +57,7 @@ WAV2LIP_VENV = os.environ.get("WAV2LIP_VENV", str(Path(__file__).parent / ".venv
 # latentsync, it generates lip sync, head motion AND facial expression in one
 # audio+photo-driven pass, so it never calls render_video/run_latentsync/
 # make_idle_motion_video.
+INFINITETALK_LIGHTX2V_LORA = "Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors"
 INFINITETALK_DIR = os.environ.get("INFINITETALK_DIR", str(Path(__file__).parent / "InfiniteTalk"))
 INFINITETALK_VENV = os.environ.get("INFINITETALK_VENV", str(Path(__file__).parent / ".venv-infinitetalk"))
 # One InfiniteTalk chunk is 81 frames at 25 fps (3.24s); it needs strictly more
@@ -1050,6 +1051,7 @@ def render_infinitetalk(
     quant: str = "fp8",
     low_vram: bool = True,
     mode: str = "streaming",
+    accel: str = "none",
 ) -> None:
     """Run InfiniteTalk to generate lip sync, head motion AND facial
     expression together from a single photo + audio + text scene prompt.
@@ -1070,6 +1072,11 @@ def render_infinitetalk(
     patches (Windows commit-limit loader, transformers 5 and Python 3.11
     drift, RTX 50-series kernels, GPU allocator cap, lazy T5/CLIP) and then
     hands every argument through unchanged. See that file for the details.
+
+    `accel="lightx2v"` loads the lightx2v step-distillation LoRA with the
+    sampling settings InfiniteTalk's README gives for it (text CFG 1, audio
+    CFG 2, shift 2; `sample_steps` should then be ~4). That is 2 DiT passes
+    per step instead of 3, and 4 steps instead of 40.
     """
     inference_py = Path(INFINITETALK_DIR) / "generate_infinitetalk.py"
     worker = Path(__file__).parent / "infinitetalk_run.py"
@@ -1149,6 +1156,14 @@ def render_infinitetalk(
         cmd += ["--quant", quant, "--quant_dir", str(quant_dir)]
     if low_vram:
         cmd += ["--num_persistent_param_in_dit", "0"]
+    if accel == "lightx2v":
+        lora = Path(INFINITETALK_DIR) / "weights" / "lora" / INFINITETALK_LIGHTX2V_LORA
+        if not lora.exists():
+            raise FileNotFoundError(
+                f"Missing the lightx2v LoRA at {lora}. Re-run setup_infinitetalk.sh to download it.")
+        cmd += ["--lora_dir", str(lora), "--lora_scale", "1.0",
+                "--sample_text_guide_scale", "1.0", "--sample_audio_guide_scale", "2.0",
+                "--sample_shift", "2"]
 
     print("Running InfiniteTalk:", " ".join(cmd))
     try:
@@ -1475,9 +1490,12 @@ def main():
     parser.add_argument("--infinitetalk-size", default="480", choices=["480", "720"],
                         help="[infinitetalk] Render resolution, 480p (default) or 720p - 720p needs "
                              "significantly more VRAM/time")
-    parser.add_argument("--infinitetalk-steps", type=int, default=40,
-                        help="[infinitetalk] Diffusion sample steps (default 40). Higher = better "
-                             "quality, slower")
+    parser.add_argument("--infinitetalk-steps", type=int, default=None,
+                        help="[infinitetalk] Diffusion sample steps (default 40, or 4 with "
+                             "--infinitetalk-accel lightx2v). Higher = better quality, slower")
+    parser.add_argument("--infinitetalk-accel", default="none", choices=["none", "lightx2v"],
+                        help="[infinitetalk] lightx2v: step-distillation LoRA, 4 steps with 2 "
+                             "model passes each instead of 40 x 3 - roughly 15x faster")
     parser.add_argument("--infinitetalk-quant", default="fp8", choices=["fp8", "none"],
                         help="[infinitetalk] fp8 (default): quantized model, needed to fit a "
                              "12GB-class GPU. none: full precision, needs significantly more VRAM "
@@ -1515,7 +1533,8 @@ def main():
         engine_opts = dict(
             scene_prompt=args.scene_prompt,
             size=args.infinitetalk_size,
-            sample_steps=args.infinitetalk_steps,
+            sample_steps=args.infinitetalk_steps or (4 if args.infinitetalk_accel == "lightx2v" else 40),
+            accel=args.infinitetalk_accel,
             quant=args.infinitetalk_quant,
             low_vram=not args.infinitetalk_no_low_vram,
             mode=args.infinitetalk_mode,

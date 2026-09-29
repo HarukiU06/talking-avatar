@@ -177,6 +177,11 @@ hf_download TencentGameMate/chinese-wav2vec2-base weights/chinese-wav2vec2-base
 # it from the same quant_models directory and fails without it. Upstream only
 # publishes the fp8 T5, which is why make_avatar.py offers no int8 option.
 hf_download MeiGen-AI/InfiniteTalk weights/InfiniteTalk "single/*" "quant_models/infinitetalk_single_fp8*" "quant_models/t5_fp8*" "quant_models/t5_map_fp8*"
+# lightx2v step-distillation LoRA (~300MB) for --infinitetalk-accel lightx2v:
+# 4 sampling steps at text CFG 1 instead of 40 at full CFG, the pairing
+# InfiniteTalk's README recommends. infinitetalk_run.py applies it to the
+# quantized model (upstream only applies LoRAs to the unquantized one).
+hf_download Kijai/WanVideo_comfy weights/lora "Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors"
 
 cd ..
 

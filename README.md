@@ -285,6 +285,21 @@ CPU offload; that's a deliberate quality-over-speed tradeoff, not a bug.
 Start with `--infinitetalk-steps 8` (about 20 minutes per chunk) to check
 that a photo and prompt work before committing to a long run.
 
+`--infinitetalk-accel lightx2v` is the fast path: it loads the lightx2v
+step-distillation LoRA (downloaded by `setup_infinitetalk.sh`) with the
+settings InfiniteTalk's README gives for it — 4 steps, text CFG 1, audio
+CFG 2 — so each step is two DiT passes instead of three and there are 4
+steps instead of 40. Measured on the same machine: about 7.5 minutes per
+chunk including the VAE decode, versus ~1.5 hours, so roughly 2.6 minutes
+of rendering per second of speech. Distillation isn't bit-identical to 40
+full-CFG steps; compare on your own photo if it matters.
+
+For anything longer than about a minute, render it in sections (one
+`make_avatar.py` call per paragraph, or `lines:` in a config) and join them
+with ffmpeg's concat demuxer: InfiniteTalk's README notes that single-image
+generation drifts in colour beyond ~1 minute, and each section restarts
+from the original photo.
+
 ## 4. Usage
 
 ### Quick single test

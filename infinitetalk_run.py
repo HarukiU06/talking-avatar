@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch InfiniteTalk's generate_infinitetalk.py with two runtime patches.
+"""Launch InfiniteTalk's generate_infinitetalk.py with runtime patches.
 
 Runs inside .venv-infinitetalk with the InfiniteTalk checkout as its working
 directory, never imported by make_avatar.py (same subprocess isolation rule as
@@ -117,6 +117,34 @@ under version control and leaves the vendored checkout pristine.
     runs with the allocator cap lifted to everything but a small reserve,
     and if it still hits OOM it is retried on the CPU - slow, but the clip
     is not lost after an hour of sampling.
+
+11. LoRAs on the quantized model. Upstream applies --lora_dir only when
+    --quant is off (`if lora_dir is not None and quant is None`) and
+    silently ignores it otherwise - but the fp8 model is the only one that
+    fits this machine, and the step-distillation LoRAs the InfiniteTalk
+    README recommends (lightx2v: 4 steps at text CFG 1 / audio CFG 2) are
+    the difference between 120 and 8 DiT passes per chunk. Merging the
+    delta into fp8 weights would round most of it away (e4m3 steps are
+    ~6% of the weight; a LoRA delta is typically smaller), so each LoRA
+    linear instead gets a bf16 low-rank side branch, out + s*B(A(x)), via a
+    forward hook - the same function the upstream merge computes, at rank
+    32 cost. The factors live in pinned host memory and are copied up per
+    call, keeping ~300MB off a GPU the VAE decode needs. Bias and norm deltas (diff_b / diff) are plain tensors and are
+    added in place, as upstream does. Attached on the first generate call,
+    after the VRAM-management wrappers have replaced the original modules.
+
+12. File-backed DiT weights. Patch 1 brought the quantized load down to
+    the checkpoint itself, but safetensors' load_file still copies it into
+    ~19.5GB of private memory, and every byte of that is charged against
+    Windows' commit limit (RAM + pagefile). With a browser, Steam and WSL
+    open, this 32GB machine had 38.2 of 47.9GB committed and the load died
+    with the same 0xC0000005 as in patch 1. The checkpoint is instead
+    memory-mapped read-only and the tensors are views into the mapping:
+    file-backed pages cost no commit, the OS keeps them cached while RAM
+    allows and re-reads them from disk otherwise. Nothing writes to them -
+    the fp8 data is only ever copied to the GPU, and every fp32 tensor in
+    the file (scales, biases, norms) is replaced by a bf16 copy before use
+    (patch 9 and upstream's to_param_dtype_fp32only).
 """
 import gc
 import inspect
@@ -412,6 +440,8 @@ def install_vae_decode_fallback(reserve_gb: float = 0.4) -> None:
             return original_decode(self, zs)
         _, total = torch.cuda.mem_get_info()
         torch.cuda.empty_cache()
+        print(f"infinitetalk_run: VAE decode starting with "
+              f"{torch.cuda.memory_allocated() / 2**30:.2f} GB allocated", flush=True)
         torch.cuda.set_per_process_memory_fraction(min((total - reserve_gb * 2**30) / total, 1.0))
         try:
             return original_decode(self, zs)
@@ -436,8 +466,147 @@ def install_vae_decode_fallback(reserve_gb: float = 0.4) -> None:
     WanVAE.decode = decode
 
 
+def _resolve_lora_target(model, dotted):
+    """model.<dotted>, stepping through the `.module` indirection that
+    AutoWrappedModule adds around norms and convs."""
+    current = model
+    for part in dotted.split("."):
+        if part.isdigit():
+            current = current[int(part)]
+        elif hasattr(current, part):
+            current = getattr(current, part)
+        elif hasattr(current, "module") and hasattr(current.module, part):
+            current = getattr(current.module, part)
+        else:
+            return None
+    return current
+
+
+def attach_lora_side_branches(model, lora_paths, lora_scales, device) -> None:
+    from safetensors import safe_open
+    import torch.nn.functional as F
+
+    prefix = "diffusion_model."
+    hooked = adjusted = 0
+    missing = []
+    for path, scale in zip(lora_paths, lora_scales):
+        with safe_open(path, framework="pt") as f:
+            keys = set(f.keys())
+            for key in sorted(keys):
+                if not key.startswith(prefix):
+                    continue
+                name = key[len(prefix):]
+                if name.endswith(".lora_down.weight"):
+                    up_key = key.replace("lora_down.weight", "lora_up.weight")
+                    if up_key not in keys:
+                        continue
+                    module = _resolve_lora_target(model, name[: -len(".lora_down.weight")])
+                    if module is None:
+                        missing.append(name)
+                        continue
+                    # Kept in pinned host memory and copied up per call: ~300MB
+                    # resident on the GPU was enough to push the VAE decode of a
+                    # second streaming chunk into OOM, and the copies cost
+                    # ~0.1% of a forward pass.
+                    down = f.get_tensor(key).to(torch.bfloat16).pin_memory()
+                    up = (f.get_tensor(up_key) * scale).to(torch.bfloat16).pin_memory()
+
+                    def branch(_module, inputs, output, down=down, up=up):
+                        x = inputs[0]
+                        d = down.to(x.device, non_blocking=True)
+                        u = up.to(x.device, non_blocking=True)
+                        return output + F.linear(F.linear(x.to(d.dtype), d), u).to(output.dtype)
+
+                    module.register_forward_hook(branch)
+                    hooked += 1
+                elif name.endswith(".diff_b") or name.endswith(".diff"):
+                    attr = "bias" if name.endswith(".diff_b") else "weight"
+                    owner = _resolve_lora_target(model, name.rsplit(".", 1)[0])
+                    param = getattr(owner, attr, None) if owner is not None else None
+                    if param is None and owner is not None and hasattr(owner, "module"):
+                        param = getattr(owner.module, attr, None)
+                    if param is None:
+                        missing.append(name)
+                        continue
+                    with torch.no_grad():
+                        param.add_((f.get_tensor(key).float() * scale).to(param.device, param.dtype))
+                    adjusted += 1
+    print(f"infinitetalk_run: LoRA attached to quantized model: {hooked} low-rank branches, "
+          f"{adjusted} bias/norm deltas", flush=True)
+    if missing:
+        print(f"infinitetalk_run: {len(missing)} LoRA entries had no matching module "
+              f"(first few: {missing[:5]})", file=sys.stderr, flush=True)
+
+
+def install_quantized_lora() -> None:
+    import wan.multitalk
+
+    pipeline = wan.multitalk.InfiniteTalkPipeline
+    original_init = pipeline.__init__
+    original_generate = pipeline.generate_infinitetalk
+
+    def __init__(self, *args, lora_dir=None, lora_scales=None, quant=None, **kwargs):
+        original_init(self, *args, lora_dir=lora_dir, lora_scales=lora_scales, quant=quant, **kwargs)
+        self._pending_lora = (lora_dir, lora_scales) if (lora_dir and quant is not None) else None
+
+    def generate_infinitetalk(self, *args, **kwargs):
+        pending = getattr(self, "_pending_lora", None)
+        if pending:
+            self._pending_lora = None
+            attach_lora_side_branches(self.model, pending[0], pending[1], self.device)
+        return original_generate(self, *args, **kwargs)
+
+    pipeline.__init__ = __init__
+    pipeline.generate_infinitetalk = generate_infinitetalk
+
+
+_SAFETENSORS_DTYPES = {
+    "F64": torch.float64, "F32": torch.float32, "F16": torch.float16, "BF16": torch.bfloat16,
+    "F8_E4M3": torch.float8_e4m3fn, "F8_E5M2": torch.float8_e5m2,
+    "I64": torch.int64, "I32": torch.int32, "I16": torch.int16, "I8": torch.int8,
+    "U8": torch.uint8, "BOOL": torch.bool,
+}
+
+
+def load_file_mapped(filename, device="cpu"):
+    """safetensors.torch.load_file, but returning read-only views into a
+    memory mapping of the file instead of private copies (see patch 12)."""
+    import json
+    import mmap
+    import struct
+    import warnings
+
+    if str(device) != "cpu":
+        from safetensors.torch import load_file
+        return load_file(filename, device=device)
+    with open(filename, "rb") as f:
+        mapping = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+    header_len = struct.unpack("<Q", mapping[:8])[0]
+    header = json.loads(mapping[8:8 + header_len])
+    base = 8 + header_len
+    tensors = {}
+    with warnings.catch_warnings():
+        # "The given buffer is not writable": intended, nothing writes to these.
+        warnings.simplefilter("ignore", UserWarning)
+        for name, info in header.items():
+            if name == "__metadata__":
+                continue
+            dtype = _SAFETENSORS_DTYPES[info["dtype"]]
+            start, end = info["data_offsets"]
+            numel = 1
+            for dim in info["shape"]:
+                numel *= dim
+            if numel == 0:
+                tensors[name] = torch.empty(info["shape"], dtype=dtype)
+                continue
+            tensors[name] = torch.frombuffer(
+                mapping, dtype=dtype, count=numel, offset=base + start).view(info["shape"])
+    return tensors
+
+
 def main() -> None:
     install_gpu_memory_cap()
+    install_quantized_lora()
     install_fp32_attention_fallback()
     install_evicting_encoders()
     install_chunked_ref_attn_map()
@@ -448,6 +617,7 @@ def main() -> None:
     import wan.multitalk
     import wan.modules.t5
     wan.multitalk.requantize = requantize_low_commit
+    wan.multitalk.load_file = load_file_mapped
     wan.modules.t5.requantize = requantize_low_commit
 
     import generate_infinitetalk
