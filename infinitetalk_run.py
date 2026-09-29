@@ -145,6 +145,18 @@ under version control and leaves the vendored checkout pristine.
     the fp8 data is only ever copied to the GPU, and every fp32 tensor in
     the file (scales, biases, norms) is replaced by a bf16 copy before use
     (patch 9 and upstream's to_param_dtype_fp32only).
+
+13. Attention without flash_attn. The DiT's self- and cross-attention call
+    wan.modules.attention.flash_attention directly, which asserts that
+    flash_attn is installed - unlike the attention() wrapper next to it,
+    which falls back to PyTorch's scaled_dot_product_attention. flash_attn
+    has no wheel for most torch/CUDA combinations, and no Turing (T4) or
+    Windows build at all, so a machine without it could not run the engine.
+    When flash_attn is missing, flash_attention is replaced by an SDPA
+    version that keeps the one mask that matters - the text cross-attention's
+    k_lens, which hides T5 padding - and is a no-op wherever flash_attn is
+    present. Checked against flash_attn's own output on random inputs
+    (see the docstring of install_sdpa_attention_fallback).
 """
 import gc
 import inspect
@@ -604,9 +616,47 @@ def load_file_mapped(filename, device="cpu"):
     return tensors
 
 
+def install_sdpa_attention_fallback() -> None:
+    """Replace wan.modules.attention.flash_attention with an SDPA version when
+    flash_attn is not importable (patch 13). q_lens, window_size and dropout
+    are not honoured: the DiT never sets them (q_lens=None, window (-1, -1),
+    dropout 0)."""
+    import torch.nn.functional as F
+    import wan.modules.attention as attention_module
+
+    if attention_module.FLASH_ATTN_2_AVAILABLE or attention_module.FLASH_ATTN_3_AVAILABLE:
+        return
+
+    def flash_attention(q, k, v, q_lens=None, k_lens=None, dropout_p=0., softmax_scale=None,
+                        q_scale=None, causal=False, window_size=(-1, -1), deterministic=False,
+                        dtype=torch.bfloat16, version=None):
+        out_dtype = q.dtype
+        if q_scale is not None:
+            q = q * q_scale
+        work = q.dtype if q.dtype in (torch.float16, torch.bfloat16) else dtype
+        mask = None
+        if k_lens is not None:
+            keep = torch.arange(k.size(1), device=k.device)[None, :] < k_lens.to(k.device)[:, None]
+            if not bool(keep.all()):
+                mask = keep[:, None, None, :]
+        out = F.scaled_dot_product_attention(
+            q.transpose(1, 2).to(work), k.transpose(1, 2).to(work), v.transpose(1, 2).to(work),
+            attn_mask=mask, dropout_p=dropout_p, is_causal=causal, scale=softmax_scale)
+        return out.transpose(1, 2).contiguous().to(out_dtype)
+
+    attention_module.flash_attention = flash_attention
+    import wan.modules.model
+    import wan.modules.multitalk_model
+    for module in (wan.modules.model, wan.modules.multitalk_model):
+        if hasattr(module, "flash_attention"):
+            module.flash_attention = flash_attention
+    print("infinitetalk_run: flash_attn not available; using scaled_dot_product_attention", flush=True)
+
+
 def main() -> None:
     install_gpu_memory_cap()
     install_quantized_lora()
+    install_sdpa_attention_fallback()
     install_fp32_attention_fallback()
     install_evicting_encoders()
     install_chunked_ref_attn_map()

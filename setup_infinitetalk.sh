@@ -77,8 +77,14 @@ python -m pip install -U xformers
 # troubleshooting on Windows: no prebuilt wheel may exist for this exact
 # torch/CUDA/Python combination, and building from source needs the full CUDA
 # Toolkit (not just the driver) plus MSVC Build Tools, and can take a long time.
+# SKIP_FLASH_ATTN=1 (used by the Colab notebook) skips it: infinitetalk_run.py
+# falls back to PyTorch's scaled_dot_product_attention when flash_attn is
+# missing, and flash_attn has no build for Turing GPUs like the Colab T4.
 FLASH_ATTN_OK=0
-if python -m pip install "flash_attn==2.7.4.post1"; then
+if [ "${SKIP_FLASH_ATTN:-0}" = "1" ]; then
+  echo "SKIP_FLASH_ATTN=1: not installing flash_attn (SDPA attention fallback will be used)."
+  FLASH_ATTN_OK=1
+elif python -m pip install "flash_attn==2.7.4.post1"; then
   FLASH_ATTN_OK=1
 else
   # flash-attn's source tree has very deeply nested paths (its
@@ -170,6 +176,10 @@ for p in [$(printf "'%s'," "${include_args[@]}")]:
 app()
 "
 }
+if [ "${SKIP_DOWNLOADS:-0}" = "1" ]; then
+  echo "SKIP_DOWNLOADS=1: leaving the checkpoint downloads to the caller."
+  exit 0
+fi
 hf_download Wan-AI/Wan2.1-I2V-14B-480P weights/Wan2.1-I2V-14B-480P
 hf_download TencentGameMate/chinese-wav2vec2-base weights/chinese-wav2vec2-base
 # The quantized DiT needs the matching quantized T5 encoder alongside it

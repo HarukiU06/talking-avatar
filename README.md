@@ -294,6 +294,13 @@ chunk including the VAE decode, versus ~1.5 hours, so roughly 2.6 minutes
 of rendering per second of speech. Distillation isn't bit-identical to 40
 full-CFG steps; compare on your own photo if it matters.
 
+No suitable GPU? `colab/talking_avatar_colab.ipynb` runs the same engine on
+Google Colab (setup, model download, upload your photo and voice, render in
+sections). It has not been tested on the free T4, which is much weaker than
+the machine above; it starts with a one-chunk timing test for that reason.
+It relies on `infinitetalk_run.py` falling back to PyTorch attention when
+`flash_attn` isn't installed (`SKIP_FLASH_ATTN=1 ./setup_infinitetalk.sh`).
+
 For anything longer than about a minute, render it in sections (one
 `make_avatar.py` call per paragraph, or `lines:` in a config) and join them
 with ffmpeg's concat demuxer: InfiniteTalk's README notes that single-image
