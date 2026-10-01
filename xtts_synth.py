@@ -13,7 +13,8 @@ console encoding errors this project already works around elsewhere.
 
 Usage:  python xtts_synth.py JOB_JSON
 where JOB_JSON is {"sentences": [...], "lang": "en",
-                   "speaker_wav": "...", "out_dir": "..."}
+                   "speaker_wav": "...", "out_dir": "...",
+                   "seeds": [...]}      # seeds optional, one per sentence
 and the result is written back to JOB_JSON + ".result" as
                   {"sr": 24000, "files": ["...wav", ...]}
 """
@@ -59,7 +60,11 @@ def main() -> int:
     out_dir = job["out_dir"]
     os.makedirs(out_dir, exist_ok=True)
     files = []
+    seeds = job.get("seeds")  # optional: one seed per sentence, for reproducible takes
     for i, sentence in enumerate(job["sentences"]):
+        if seeds:
+            torch.manual_seed(seeds[i])
+            torch.cuda.manual_seed_all(seeds[i])
         path = os.path.join(out_dir, f"sentence_{i:03d}.wav")
         tts.tts_to_file(text=sentence, speaker_wav=job["speaker_wav"],
                         language=lang, file_path=path)
