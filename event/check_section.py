@@ -57,7 +57,7 @@ def delta_e(a, b) -> float:
     return float(np.linalg.norm(to_lab(np.asarray(a)) - to_lab(np.asarray(b))))
 
 
-def syncnet(video: Path) -> dict:
+def syncnet(video: Path, device: str = "cuda") -> dict:
     """LatentSync's SyncNet scorer (subprocess: it lives in .venv-latentsync)."""
     import re
 
@@ -67,6 +67,7 @@ def syncnet(video: Path) -> dict:
     tmp.mkdir(parents=True, exist_ok=True)
     out = subprocess.run([str(py), "-m", "eval.eval_sync_conf", "--video_path", str(video.resolve()),
                           "--temp_dir", str(tmp.resolve())], cwd=str(ls), capture_output=True, text=True,
+                         env={**__import__("os").environ, **({"CUDA_VISIBLE_DEVICES": ""} if device == "cpu" else {})},
                          encoding="utf-8", errors="replace").stdout
     conf = re.search(r"SyncNet confidence: ([\d.-]+)", out)
     off = re.search(r"AV offset: (-?\d+)", out)
@@ -134,7 +135,7 @@ def check(section: str, device: str) -> dict:
         "tail_mouth_open_mean": round(float(np.nanmean(tail)), 3) if len(tail) else None,
         "tail_mouth_open_last": round(float(tail[-1]), 3) if len(tail) and not np.isnan(tail[-1]) else None,
         "frames_without_face": missing,
-        **syncnet(video),
+        **syncnet(video, device),
     }
     CHECK.mkdir(parents=True, exist_ok=True)
     subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(video), "-vf",
