@@ -216,13 +216,117 @@ def chunks_for(duration_s: float) -> int:
     return 1 + max(0, int(np.ceil((frames - 81) / 72)))
 
 
+def load_recording(path: Path, numbers: list, min_gap_s: float, log: dict) -> dict:
+    """Per-line clips from a human recording, at SR mono.
+
+    `path` is either a folder holding one file per line (line_01.wav ...
+    line_18.wav, any format librosa reads), or one continuous take with a
+    clear pause between lines, which is split on silence: speech runs closer
+    together than `min_gap_s` belong to the same line, so commas and breaths
+    don't split a line. The split must yield exactly one segment per line or
+    nothing is guessed - the gaps are printed so the threshold can be set."""
+    import librosa
+
+    if path.is_dir():
+        clips = {}
+        for n in numbers:
+            found = sorted(path.glob(f"line_{n:02d}.*"))
+            if not found:
+                raise FileNotFoundError(f"missing {path}/line_{n:02d}.* (one file per script line)")
+            clips[n], _ = librosa.load(found[0], sr=SR, mono=True)
+            log[f"rec_line_{n:02d}"] = {"source": str(found[0])}
+        return clips
+
+    audio, _ = librosa.load(path, sr=SR, mono=True)
+    spans = librosa.effects.split(audio, top_db=35, frame_length=1024, hop_length=256)
+    groups = [[int(spans[0][0]), int(spans[0][1])]]
+    gaps = []
+    for start, end in spans[1:]:
+        gap = (start - groups[-1][1]) / SR
+        if gap < min_gap_s:
+            groups[-1][1] = int(end)
+        else:
+            gaps.append(round(gap, 2))
+            groups.append([int(start), int(end)])
+    if len(groups) != len(numbers):
+        raise RuntimeError(
+            f"{path.name}: found {len(groups)} spoken segments for {len(numbers)} script lines "
+            f"(gaps >= {min_gap_s}s between them: {gaps}). Re-record with a longer pause between "
+            f"lines, change --min-gap, or record one file per line into a folder.")
+    # The -35 dB split cuts into quiet endings (a devoiced ～ます is barely
+    # voiced), so widen each line into its neighbouring gaps - up to 0.4 s, never
+    # past the gap's midpoint - and let tidy()'s gentler -45 dB trim decide.
+    pad = int(0.4 * SR)
+    widened = []
+    for i, (start, end) in enumerate(groups):
+        lo = max(start - pad, (groups[i - 1][1] + start) // 2 if i else 0)
+        hi = min(end + pad, (end + groups[i + 1][0]) // 2 if i + 1 < len(groups) else len(audio))
+        widened.append((lo, hi))
+    clips = {}
+    for n, (start, end) in zip(numbers, widened):
+        clips[n] = audio[start:end].copy()
+        log[f"rec_line_{n:02d}"] = {"source": str(path), "start_s": round(start / SR, 2), "end_s": round(end / SR, 2)}
+    return clips
+
+
+def finish(args, sections, clips, tts_lines, route_desc, line18_note=""):
+    """Sections and full track at one common gain, plus script_tts.txt and the report."""
+    # Sections and full track, one common gain.
+    built = {name: build_section(lines, clips, SR) for name, lines in sections.items()}
+    full = np.concatenate(list(built.values()))
+    import pyloudnorm as pyln
+
+    # Speech like this has a high crest factor, so plain gain to -16 LUFS could push
+    # its few loudest peaks far past full scale. Solve the gain with the soft limiter
+    # in the loop, so the loudness is measured on what is actually written.
+    meter = pyln.Meter(SR)
+    measured = meter.integrated_loudness(full)
+    gain = 10 ** ((TARGET_LUFS - measured) / 20)
+    for _ in range(8):
+        final_lufs = meter.integrated_loudness(soft_limit(full * gain))
+        if abs(final_lufs - TARGET_LUFS) < 0.1:
+            break
+        gain *= 10 ** ((TARGET_LUFS - final_lufs) / 20)
+    limited = soft_limit(full * gain)
+    final_peak_db = 20 * np.log10(float(np.abs(limited).max()))
+    touched = float((np.abs(full * gain) > KNEE).mean()) * 100
+    for name, audio in built.items():
+        sf.write(OUT / f"{name}.wav", soft_limit(audio * gain), SR, subtype="PCM_24")
+    sf.write(OUT / "full.wav", limited, SR, subtype="PCM_24")
+    (OUT / "script_tts.txt").write_text("\n".join(tts_lines) + "\n", encoding="utf-8")
+
+    report = [f"route: {route_desc}",
+              f"sample rate {SR} Hz, loudness {final_lufs:.1f} LUFS (target {TARGET_LUFS}), "
+              f"peak {final_peak_db:.1f} dBFS, {touched:.2f}% of samples soft-limited",
+              "", "section  duration  chunks  est. render"]
+    total_min = 0.0
+    for name, audio in built.items():
+        d = len(audio) / SR
+        c = chunks_for(d)
+        est = LOAD_MIN + c * MIN_PER_CHUNK
+        total_min += est
+        report.append(f"{name:7s} {d:7.1f}s  {c:5d}  {est:5.0f} min")
+    report.append(f"total   {len(full) / SR:7.1f}s  {line18_note}  ~{total_min / 60:.1f} h")
+    text = "\n".join(report)
+    (OUT / "report.txt").write_text(text + "\n", encoding="utf-8")
+    print("\n" + text)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--voice", default=str(ROOT / "voice_samples" / "newtest.wav"),
                     help="reference sample for both languages")
-    ap.add_argument("--route", choices=["chatterbox", "xtts-seedvc"], default="chatterbox",
-                    help="chatterbox: kana readings, cfg_weight 0.2 (current pick). "
-                         "xtts-seedvc: XTTS-v2 then Seed-VC (rejected by ear, kept for comparison)")
+    ap.add_argument("--route", choices=["recording", "chatterbox", "xtts-seedvc"], default="chatterbox",
+                    help="recording: a person's reading (--recording). chatterbox / xtts-seedvc: TTS "
+                         "routes, both rejected by ear for intonation, kept for comparison")
+    ap.add_argument("--recording", default=None,
+                    help="[recording] one continuous take, or a folder of line_01.wav ... line_18.wav")
+    ap.add_argument("--min-gap", type=float, default=1.0,
+                    help="[recording] silence (s) that separates two lines in a continuous take")
+    ap.add_argument("--denoise-rec", type=float, default=0.0,
+                    help="[recording] noisereduce strength on the recording (0 = off)")
+    ap.add_argument("--seedvc-to", default=None,
+                    help="[recording] also convert the reading's timbre toward this voice with Seed-VC")
     ap.add_argument("--cfg-weight", type=float, default=0.2, help="[chatterbox] Japanese lines")
     ap.add_argument("--exaggeration", type=float, default=0.5, help="[chatterbox]")
     ap.add_argument("--denoise-ref", type=float, default=0.85,
@@ -246,6 +350,34 @@ def main():
     RAW.mkdir(exist_ok=True)
     log_path = OUT / "tts_log.json"
     log = json.loads(log_path.read_text(encoding="utf-8")) if log_path.exists() else {}
+
+    if args.route == "recording":
+        if not args.recording:
+            ap.error("--route recording needs --recording FILE_OR_FOLDER")
+        numbers = [ln["n"] for lines in sections.values() for ln in lines]
+        raw = load_recording(Path(args.recording), numbers, args.min_gap, log)
+        clips, tts_lines = {}, []
+        for n, audio in raw.items():
+            if args.denoise_rec > 0:
+                audio = ma.denoise(audio, SR, strength=args.denoise_rec)
+            if args.seedvc_to:
+                src, dst = RAW / f"rec_line_{n:02d}.wav", RAW / f"rec_line_{n:02d}.vc.wav"
+                sf.write(src, audio, SR)
+                ma.convert_voice(str(src), args.seedvc_to, str(dst))
+                audio, rate = sf.read(dst, dtype="float32")
+                if audio.ndim > 1:
+                    audio = audio.mean(1)
+                if rate != SR:
+                    g = math.gcd(SR, rate)
+                    audio = resample_poly(audio, SR // g, rate // g).astype(np.float32)
+            clips[n] = tidy(audio.astype(np.float32), SR)
+            text = next(ln["text"] for lines in sections.values() for ln in lines if ln["n"] == n)
+            tts_lines.append(f"{n} [recorded] {text}")
+            print(f"line {n:2d} recorded {len(clips[n]) / SR:5.2f}s  {text[:40]}", flush=True)
+        log_path.write_text(json.dumps(log, ensure_ascii=False, indent=1), encoding="utf-8")
+        finish(args, sections, clips, tts_lines,
+               f"recording {args.recording}" + (f", Seed-VC toward {args.seedvc_to}" if args.seedvc_to else ""))
+        return
 
     # Every clip that may be needed: the script lines, plus the line-18 candidates.
     main_jobs, take_jobs = {}, {}
@@ -298,47 +430,10 @@ def main():
         audio, _ = sf.read(RAW / f"{j['tag']}.wav", dtype="float32")
         sf.write(takes_dir / f"take_seed{seed}_{ending}.wav", np.concatenate([tidy(audio, SR), tail]), SR)
 
-    # Sections and full track, one common gain.
-    built = {name: build_section(lines, clips, SR) for name, lines in sections.items()}
-    full = np.concatenate(list(built.values()))
-    import pyloudnorm as pyln
-
-    # Speech like this has a high crest factor, so plain gain to -16 LUFS could push
-    # its few loudest peaks far past full scale. Solve the gain with the soft limiter
-    # in the loop, so the loudness is measured on what is actually written.
-    meter = pyln.Meter(SR)
-    measured = meter.integrated_loudness(full)
-    gain = 10 ** ((TARGET_LUFS - measured) / 20)
-    for _ in range(8):
-        final_lufs = meter.integrated_loudness(soft_limit(full * gain))
-        if abs(final_lufs - TARGET_LUFS) < 0.1:
-            break
-        gain *= 10 ** ((TARGET_LUFS - final_lufs) / 20)
-    limited = soft_limit(full * gain)
-    final_peak_db = 20 * np.log10(float(np.abs(limited).max()))
-    touched = float((np.abs(full * gain) > KNEE).mean()) * 100
-    for name, audio in built.items():
-        sf.write(OUT / f"{name}.wav", soft_limit(audio * gain), SR, subtype="PCM_24")
-    sf.write(OUT / "full.wav", limited, SR, subtype="PCM_24")
-    (OUT / "script_tts.txt").write_text("\n".join(tts_lines) + "\n", encoding="utf-8")
-
-    route_desc = (f"Chatterbox (kana readings, cfg_weight {args.cfg_weight}, exaggeration {args.exaggeration}; EN line cfg 0)"
-                  if args.route == "chatterbox" else "XTTS-v2 (kana readings) -> Seed-VC (25 steps, cfg 0.7)")
-    report = [f"voice: {args.voice}  route: {route_desc}",
-              f"sample rate {SR} Hz, loudness {final_lufs:.1f} LUFS (target {TARGET_LUFS}), "
-              f"peak {final_peak_db:.1f} dBFS, {touched:.2f}% of samples soft-limited",
-              "", "section  duration  chunks  est. render"]
-    total_min = 0.0
-    for name, audio in built.items():
-        d = len(audio) / SR
-        c = chunks_for(d)
-        est = LOAD_MIN + c * MIN_PER_CHUNK
-        total_min += est
-        report.append(f"{name:7s} {d:7.1f}s  {c:5d}  {est:5.0f} min")
-    report.append(f"total   {len(full) / SR:7.1f}s  (line 18 = seed {seed18}, ending {ending18})  ~{total_min / 60:.1f} h")
-    text = "\n".join(report)
-    (OUT / "report.txt").write_text(text + "\n", encoding="utf-8")
-    print("\n" + text)
+    route_desc = (f"voice {args.voice}, Chatterbox (kana readings, cfg_weight {args.cfg_weight}, "
+                  f"exaggeration {args.exaggeration}; EN line cfg 0)" if args.route == "chatterbox"
+                  else f"voice {args.voice}, XTTS-v2 (kana readings) -> Seed-VC (25 steps, cfg 0.7)")
+    finish(args, sections, clips, tts_lines, route_desc, f"(line 18 = seed {seed18}, ending {ending18})")
 
 
 if __name__ == "__main__":
