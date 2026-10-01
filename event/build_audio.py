@@ -345,6 +345,8 @@ def main():
                     help="[recording] silence (s) that separates two lines in a continuous take")
     ap.add_argument("--denoise-rec", type=float, default=0.0,
                     help="[recording] noisereduce strength on the recording (0 = off)")
+    ap.add_argument("--replace-line", action="append", default=[],
+                    help="[recording] N=FILE: use FILE (e.g. a gen_line.py take) instead of the recorded line N")
     ap.add_argument("--seedvc-to", default=None,
                     help="[recording] also convert the reading's timbre toward this voice with Seed-VC")
     ap.add_argument("--cfg-weight", type=float, default=0.2, help="[chatterbox] Japanese lines")
@@ -376,13 +378,18 @@ def main():
             ap.error("--route recording needs --recording FILE_OR_FOLDER")
         numbers = [ln["n"] for lines in sections.values() for ln in lines]
         raw = load_recording(Path(args.recording), numbers, args.min_gap, log)
+        replaced = {}
+        for item in args.replace_line:
+            n, path = item.split("=", 1)
+            replaced[int(n)] = path
+        recorded = {n: a for n, a in raw.items() if n not in replaced}
         # Trim each line where it falls to 10 dB above the room noise. A fixed
         # -45 dB (fine for TTS, whose silence is near-digital) sits right at a
         # real room's floor and would leave the split padding in, lengthening
         # every pause with room tone.
         import librosa
 
-        everything = np.concatenate(list(raw.values()))
+        everything = np.concatenate(list(recorded.values()))
         frames = 20 * np.log10(librosa.feature.rms(y=everything, frame_length=1200, hop_length=600)[0] + 1e-9)
         noise_db, peak_db = float(np.percentile(frames, 5)), float(frames.max())
         rec_top_db = max(25.0, peak_db - (noise_db + 10))
@@ -390,6 +397,19 @@ def main():
               flush=True)
         clips, tts_lines = {}, []
         for n, audio in raw.items():
+            if n in replaced:
+                # A generated stand-in: no room noise of its own, so the TTS trim applies;
+                # its level is set by the common gain like every other line.
+                import librosa
+
+                take, _ = librosa.load(replaced[n], sr=SR, mono=True)
+                clips[n] = tidy(take.astype(np.float32), SR)
+                text = next(ln["text"] for lines in sections.values() for ln in lines if ln["n"] == n)
+                tts_lines.append(f"{n} [generated: {Path(replaced[n]).name}] {text}")
+                log[f"rec_line_{n:02d}"] = {"replaced_by": str(replaced[n])}
+                print(f"line {n:2d} generated {len(clips[n]) / SR:5.2f}s  {text[:40]}  ({Path(replaced[n]).name})",
+                      flush=True)
+                continue
             if args.denoise_rec > 0:
                 audio = ma.denoise(audio, SR, strength=args.denoise_rec)
             if args.seedvc_to:
@@ -406,6 +426,17 @@ def main():
             text = next(ln["text"] for lines in sections.values() for ln in lines if ln["n"] == n)
             tts_lines.append(f"{n} [recorded] {text}")
             print(f"line {n:2d} recorded {len(clips[n]) / SR:5.2f}s  {text[:40]}", flush=True)
+        if replaced:
+            # Match each stand-in's loudness to the recorded lines (median), or it
+            # jumps out: a Chatterbox take measured 6 dB hotter than line 2.
+            import pyloudnorm as pyln
+
+            meter = pyln.Meter(SR, block_size=0.2)
+            target = float(np.median([meter.integrated_loudness(c) for n, c in clips.items() if n not in replaced]))
+            for n in replaced:
+                level = meter.integrated_loudness(clips[n])
+                clips[n] = clips[n] * 10 ** ((target - level) / 20)
+                print(f"line {n:2d} level-matched {level:.1f} -> {target:.1f} LUFS", flush=True)
         log_path.write_text(json.dumps(log, ensure_ascii=False, indent=1), encoding="utf-8")
         finish(args, sections, clips, tts_lines,
                f"recording {args.recording}" + (f", Seed-VC toward {args.seedvc_to}" if args.seedvc_to else ""))
