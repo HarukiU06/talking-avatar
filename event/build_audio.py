@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Phase 1 of the event-host video: the audio.
 
-Route (chosen by ear from voice_ab_kana.py): every Japanese line is spelled
-out in hiragana (readings_ja.txt), spoken by XTTS-v2 for its intonation, then
-passed through Seed-VC to move the timbre toward the reference voice. The
-English line is XTTS English plus the same Seed-VC pass. Pauses are digital
-silence, and the per-section WAVs and the full WAV share one gain
-(-16 LUFS over the full track, with a soft limiter for the loudest peaks).
+Every Japanese line is spelled out in hiragana (readings_ja.txt) so no engine
+has to guess a kanji reading. Routes:
+
+  chatterbox (default, chosen by ear): Chatterbox multilingual, cfg_weight 0.2
+      for the Japanese lines and 0 for the English one.
+  xtts-seedvc (rejected by ear): XTTS-v2, then Seed-VC toward the reference.
+
+Pauses are digital silence, and the per-section WAVs and the full WAV share one
+gain (-16 LUFS over the full track, with a soft limiter for the loudest peaks).
 
     .venv/Scripts/python.exe event/build_audio.py --voice voice_samples/newtest.wav
 
@@ -155,6 +158,30 @@ def seedvc_stage(jobs, ref: str, log: dict) -> None:
         print(f"Seed-VC {i}/{len(jobs)} {j['tag']} {time.time() - t:.0f}s", flush=True)
 
 
+def chatterbox_stage(jobs, ref: str, cfg_weight: float, exaggeration: float, log: dict) -> None:
+    """Chatterbox, seeded per clip, written straight to the cache. The English
+    line uses cfg_weight 0 (a Japanese reference speaking English); the
+    Japanese lines use `cfg_weight`."""
+    import torch
+
+    for j in jobs:
+        final = RAW / f"{j['tag']}.wav"
+        if final.exists():
+            continue
+        model = ma.get_tts_model()
+        cfg = 0.0 if j["lang"] == "en" else cfg_weight
+        torch.manual_seed(j["seed"])
+        torch.cuda.manual_seed_all(j["seed"])
+        t = time.time()
+        audio = model.generate(j["text"], language_id=j["lang"], audio_prompt_path=ref,
+                               cfg_weight=cfg, exaggeration=exaggeration).squeeze().cpu().numpy()
+        sf.write(final, audio, model.sr)
+        log[j["tag"]] = {"text_tts": j["text"], "lang": j["lang"], "seed": j["seed"], "cfg_weight": cfg,
+                         "exaggeration": exaggeration, "gen_seconds": round(time.time() - t, 1)}
+        print(f"Chatterbox {j['tag']} {time.time() - t:.0f}s", flush=True)
+    ma.release_tts_model()
+
+
 def tidy(clip: np.ndarray, sr: int) -> np.ndarray:
     """Trim the model's own leading/trailing silence (pauses are ours to set),
     then 10 ms fades so a splice can never click."""
@@ -187,12 +214,19 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--voice", default=str(ROOT / "voice_samples" / "newtest.wav"),
                     help="reference sample for both languages")
+    ap.add_argument("--route", choices=["chatterbox", "xtts-seedvc"], default="chatterbox",
+                    help="chatterbox: kana readings, cfg_weight 0.2 (current pick). "
+                         "xtts-seedvc: XTTS-v2 then Seed-VC (rejected by ear, kept for comparison)")
+    ap.add_argument("--cfg-weight", type=float, default=0.2, help="[chatterbox] Japanese lines")
+    ap.add_argument("--exaggeration", type=float, default=0.5, help="[chatterbox]")
     ap.add_argument("--line18", default="181:dash",
                     help="SEED:ENDING used in S6 (ending: dash/bare/comma/ellipsis)")
     args = ap.parse_args()
 
     global VOICE_KEY
-    VOICE_KEY = f"{Path(args.voice).name}:{Path(args.voice).stat().st_size}|xtts+seedvc"
+    VOICE_KEY = f"{Path(args.voice).name}:{Path(args.voice).stat().st_size}|{args.route}"
+    if args.route == "chatterbox":
+        VOICE_KEY += f"|cfg{args.cfg_weight}|ex{args.exaggeration}"
     seed18, ending18 = args.line18.split(":")
     seed18 = int(seed18)
     sections = parse_script(SCRIPT)
@@ -218,8 +252,11 @@ def main():
     jobs = list({j["tag"]: j for j in [*main_jobs.values(), *take_jobs.values()]}.values())
 
     ref = ma.get_prepared_voice(args.voice)
-    xtts_stage(jobs, ref, log)
-    seedvc_stage(jobs, ref, log)
+    if args.route == "chatterbox":
+        chatterbox_stage(jobs, ref, args.cfg_weight, args.exaggeration, log)
+    else:
+        xtts_stage(jobs, ref, log)
+        seedvc_stage(jobs, ref, log)
     ma.cleanup_prepared_voices()
     log_path.write_text(json.dumps(log, ensure_ascii=False, indent=1), encoding="utf-8")
 
@@ -267,7 +304,9 @@ def main():
     sf.write(OUT / "full.wav", limited, SR, subtype="PCM_24")
     (OUT / "script_tts.txt").write_text("\n".join(tts_lines) + "\n", encoding="utf-8")
 
-    report = [f"voice: {args.voice}  route: XTTS-v2 (kana readings) -> Seed-VC (25 steps, cfg 0.7)",
+    route_desc = (f"Chatterbox (kana readings, cfg_weight {args.cfg_weight}, exaggeration {args.exaggeration}; EN line cfg 0)"
+                  if args.route == "chatterbox" else "XTTS-v2 (kana readings) -> Seed-VC (25 steps, cfg 0.7)")
+    report = [f"voice: {args.voice}  route: {route_desc}",
               f"sample rate {SR} Hz, loudness {final_lufs:.1f} LUFS (target {TARGET_LUFS}), "
               f"peak {final_peak_db:.1f} dBFS, {touched:.2f}% of samples soft-limited",
               "", "section  duration  chunks  est. render"]
