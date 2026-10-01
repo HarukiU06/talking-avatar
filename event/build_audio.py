@@ -182,11 +182,17 @@ def chatterbox_stage(jobs, ref: str, cfg_weight: float, exaggeration: float, log
     ma.release_tts_model()
 
 
-def tidy(clip: np.ndarray, sr: int) -> np.ndarray:
-    """Trim the model's own leading/trailing silence (pauses are ours to set),
-    then 10 ms fades so a splice can never click."""
-    import librosa
+HIGHPASS_HZ = 90  # the reference's room noise is strongest below 500 Hz, worst below 150
 
+
+def tidy(clip: np.ndarray, sr: int) -> np.ndarray:
+    """High-pass away the low rumble the clone copies from the reference, trim
+    the model's own leading/trailing silence (pauses are ours to set), then
+    10 ms fades so a splice can never click."""
+    import librosa
+    from scipy.signal import butter, sosfiltfilt
+
+    clip = sosfiltfilt(butter(4, HIGHPASS_HZ, btype="highpass", fs=sr, output="sos"), clip).astype(np.float32)
     _, (a, b) = librosa.effects.trim(clip, top_db=45)
     guard = int(0.02 * sr)
     clip = clip[max(a - guard, 0): min(b + guard, len(clip))].copy()
@@ -219,6 +225,9 @@ def main():
                          "xtts-seedvc: XTTS-v2 then Seed-VC (rejected by ear, kept for comparison)")
     ap.add_argument("--cfg-weight", type=float, default=0.2, help="[chatterbox] Japanese lines")
     ap.add_argument("--exaggeration", type=float, default=0.5, help="[chatterbox]")
+    ap.add_argument("--denoise-ref", type=float, default=0.85,
+                    help="noisereduce strength applied to the reference before cloning (0 = off). "
+                         "The TTS clones the reference's room noise, so it has to be removed there.")
     ap.add_argument("--line18", default="181:dash",
                     help="SEED:ENDING used in S6 (ending: dash/bare/comma/ellipsis)")
     args = ap.parse_args()
@@ -227,6 +236,8 @@ def main():
     VOICE_KEY = f"{Path(args.voice).name}:{Path(args.voice).stat().st_size}|{args.route}"
     if args.route == "chatterbox":
         VOICE_KEY += f"|cfg{args.cfg_weight}|ex{args.exaggeration}"
+    if args.denoise_ref > 0:
+        VOICE_KEY += f"|dn{args.denoise_ref}"
     seed18, ending18 = args.line18.split(":")
     seed18 = int(seed18)
     sections = parse_script(SCRIPT)
@@ -252,6 +263,13 @@ def main():
     jobs = list({j["tag"]: j for j in [*main_jobs.values(), *take_jobs.values()]}.values())
 
     ref = ma.get_prepared_voice(args.voice)
+    if args.denoise_ref > 0:
+        # Measured: newtest.wav has ~23 dB SNR and the clones came out at 21-26 dB,
+        # i.e. the room tone is reproduced. Clean the 30 s reference instead.
+        audio, rate = sf.read(ref, dtype="float32")
+        clean = OUT / "reference_clean.wav"
+        sf.write(clean, ma.denoise(audio, rate, strength=args.denoise_ref), rate)
+        ref = str(clean)
     if args.route == "chatterbox":
         chatterbox_stage(jobs, ref, args.cfg_weight, args.exaggeration, log)
     else:
