@@ -7,10 +7,12 @@ For a plain, light wall behind the person this needs no segmentation model:
    photo's border, and evaluate it over the whole canvas (plus fine grain).
 2. Key the person out of the photo by colour distance to that wall model
    (soft alpha, so hair strands and the soft shadow by the neck survive).
-3. Place the person centred, flush with the bottom edge. The shirt is
-   continued past the photo's side edges by shearing its edge column down and
-   away, so the shoulders round off and fall out of frame instead of ending
-   in a vertical cut.
+3. Place the person centred, flush with the bottom edge. Anything that
+   touches the photo's side edges (a shirt, say) is continued past them by
+   shearing the edge column down and away, so shoulders round off and fall
+   out of frame instead of ending in a vertical cut. With a portrait whose
+   body is narrower than the photo at the bottom edge (use --crop-bottom),
+   nothing touches the sides and only wall is extended.
 
     .venv/Scripts/python.exe event/frame_photo.py photos/TestImage.jpg out.png [--height 720]
 """
@@ -26,9 +28,12 @@ def blur(a: np.ndarray, sigma: float) -> np.ndarray:
 
 
 def frame(photo_path: str, out_path: str, height: int, canvas=(1920, 1080),
-          slope: float = 0.12, curve: float = 0.006, keep_photo_wall: bool = False) -> None:
+          slope: float = 0.12, curve: float = 0.006, crop_bottom: float = 1.0) -> None:
     cw, ch = canvas
     im = Image.open(photo_path).convert("RGB")
+    if crop_bottom < 1.0:  # keep only the top part, e.g. to stop above where the arms reach the edges
+        im = im.crop((0, 0, im.width, round(im.height * crop_bottom)))
+        im.save(out_path.replace(".png", "_crop.png"))
     w = round(im.width * height / im.height)
     photo = np.asarray(im.resize((w, height), Image.LANCZOS), dtype=np.float32)
     x0, y0 = (cw - w) // 2, ch - height
@@ -88,7 +93,9 @@ if __name__ == "__main__":
     ap.add_argument("photo")
     ap.add_argument("out")
     ap.add_argument("--height", type=int, default=720, help="height the photo is scaled to on the 1080 canvas")
+    ap.add_argument("--crop-bottom", type=float, default=1.0,
+                    help="keep only this top fraction of the photo (0.68 stops above the arms)")
     ap.add_argument("--slope", type=float, default=0.12, help="shoulder line fall per pixel outward")
     ap.add_argument("--curve", type=float, default=0.006, help="extra fall that rounds off the shoulder tip")
     a = ap.parse_args()
-    frame(a.photo, a.out, a.height, slope=a.slope, curve=a.curve)
+    frame(a.photo, a.out, a.height, slope=a.slope, curve=a.curve, crop_bottom=a.crop_bottom)

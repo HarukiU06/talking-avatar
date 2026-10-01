@@ -86,9 +86,24 @@ def parse_script(path: Path):
     return sections
 
 
+VOICE_KEY = ""  # set in main(): the reference sample's name and size
+
+
 def text_hash(text: str) -> str:
-    """Part of every raw-clip name, so a changed reading can never reuse a stale clip."""
-    return hashlib.md5(text.encode("utf-8")).hexdigest()[:6]
+    """Part of every raw-clip name, so a changed reading or reference voice can
+    never reuse a stale clip."""
+    return hashlib.md5((VOICE_KEY + "|" + text).encode("utf-8")).hexdigest()[:6]
+
+
+KNEE = 0.5  # -6 dBFS: samples below this are untouched
+
+
+def soft_limit(x: np.ndarray, ceiling: float = PEAK_CEILING) -> np.ndarray:
+    """Bend only the peaks above KNEE toward `ceiling` with a tanh curve."""
+    over = np.abs(x) > KNEE
+    y = x.copy()
+    y[over] = np.sign(x[over]) * (KNEE + (ceiling - KNEE) * np.tanh((np.abs(x[over]) - KNEE) / (ceiling - KNEE)))
+    return y
 
 
 def strip_dash(text: str) -> str:
@@ -162,6 +177,8 @@ def main():
                     help="SEED:ENDING used in S6 (ending: dash/bare/comma/ellipsis)")
     args = ap.parse_args()
 
+    global VOICE_KEY
+    VOICE_KEY = "|".join(f"{Path(v).name}:{Path(v).stat().st_size}" for v in (args.voice, args.voice_en) if v)
     sections = parse_script(SCRIPT)
     OUT.mkdir(parents=True, exist_ok=True)
     voice_ja = ma.get_prepared_voice(args.voice)
@@ -209,16 +226,24 @@ def main():
     full = np.concatenate(list(built.values()))
     import pyloudnorm as pyln
 
-    measured = pyln.Meter(sr).integrated_loudness(full)
+    # Speech from this voice has a 17-24 dB crest factor, so plain gain to
+    # -16 LUFS would push its few loudest peaks far past full scale. Solve the
+    # gain with a soft limiter in the loop (it only bends samples above KNEE),
+    # so the loudness is measured on what is actually written.
+    meter = pyln.Meter(sr)
+    measured = meter.integrated_loudness(full)
     gain = 10 ** ((TARGET_LUFS - measured) / 20)
-    peak = float(np.abs(full).max()) * gain
-    if peak > PEAK_CEILING:
-        gain *= PEAK_CEILING / peak
-    final_lufs = measured + 20 * np.log10(gain)
-    final_peak_db = 20 * np.log10(float(np.abs(full).max()) * gain)
+    for _ in range(8):
+        final_lufs = meter.integrated_loudness(soft_limit(full * gain))
+        if abs(final_lufs - TARGET_LUFS) < 0.1:
+            break
+        gain *= 10 ** ((TARGET_LUFS - final_lufs) / 20)
+    limited = soft_limit(full * gain)
+    final_peak_db = 20 * np.log10(float(np.abs(limited).max()))
+    touched = float((np.abs(full * gain) > KNEE).mean()) * 100
     for name, audio in built.items():
-        sf.write(OUT / f"{name}.wav", audio * gain, sr, subtype="PCM_24")
-    sf.write(OUT / "full.wav", full * gain, sr, subtype="PCM_24")
+        sf.write(OUT / f"{name}.wav", soft_limit(audio * gain), sr, subtype="PCM_24")
+    sf.write(OUT / "full.wav", limited, sr, subtype="PCM_24")
     (OUT / "script_tts.txt").write_text("\n".join(tts_lines) + "\n", encoding="utf-8")
 
     # Readings as pykakasi sees them: a quick check for mis-read kanji.
@@ -232,7 +257,8 @@ def main():
     (OUT / "readings.txt").write_text("\n".join(readings) + "\n", encoding="utf-8")
 
     report = [f"voice: {args.voice}  (EN cfg_weight {en_cfg})", f"sample rate {sr} Hz, "
-              f"loudness {final_lufs:.1f} LUFS (target {TARGET_LUFS}), peak {final_peak_db:.1f} dBFS",
+              f"loudness {final_lufs:.1f} LUFS (target {TARGET_LUFS}), peak {final_peak_db:.1f} dBFS, "
+              f"{touched:.2f}% of samples soft-limited",
               "", "section  duration  chunks  est. render"]
     total_min = 0.0
     for name, audio in built.items():

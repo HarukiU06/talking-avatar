@@ -1052,6 +1052,7 @@ def render_infinitetalk(
     low_vram: bool = True,
     mode: str = "streaming",
     accel: str = "none",
+    seed: int = 42,
 ) -> None:
     """Run InfiniteTalk to generate lip sync, head motion AND facial
     expression together from a single photo + audio + text scene prompt.
@@ -1150,6 +1151,7 @@ def render_infinitetalk(
         "--sample_steps", str(sample_steps),
         "--mode", mode,
         "--motion_frame", "9",
+        "--base_seed", str(seed),
         "--save_file", save_stem,
     ]
     if quant == "fp8":
@@ -1493,6 +1495,9 @@ def main():
     parser.add_argument("--infinitetalk-steps", type=int, default=None,
                         help="[infinitetalk] Diffusion sample steps (default 40, or 4 with "
                              "--infinitetalk-accel lightx2v). Higher = better quality, slower")
+    parser.add_argument("--infinitetalk-seed", type=int, default=42,
+                        help="[infinitetalk] Sampling seed (default 42, InfiniteTalk's own default). "
+                             "The same photo/audio/seed reproduces the same video; change it to re-roll.")
     parser.add_argument("--infinitetalk-accel", default="none", choices=["none", "lightx2v"],
                         help="[infinitetalk] lightx2v: step-distillation LoRA, 4 steps with 2 "
                              "model passes each instead of 40 x 3 - roughly 15x faster")
@@ -1535,6 +1540,7 @@ def main():
             size=args.infinitetalk_size,
             sample_steps=args.infinitetalk_steps or (4 if args.infinitetalk_accel == "lightx2v" else 40),
             accel=args.infinitetalk_accel,
+            seed=args.infinitetalk_seed,
             quant=args.infinitetalk_quant,
             low_vram=not args.infinitetalk_no_low_vram,
             mode=args.infinitetalk_mode,
