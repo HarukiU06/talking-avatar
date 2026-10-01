@@ -185,7 +185,7 @@ def chatterbox_stage(jobs, ref: str, cfg_weight: float, exaggeration: float, log
 HIGHPASS_HZ = 90  # the reference's room noise is strongest below 500 Hz, worst below 150
 
 
-def tidy(clip: np.ndarray, sr: int) -> np.ndarray:
+def tidy(clip: np.ndarray, sr: int, top_db: float = 45) -> np.ndarray:
     """High-pass away the low rumble the clone copies from the reference, trim
     the model's own leading/trailing silence (pauses are ours to set), then
     10 ms fades so a splice can never click."""
@@ -193,7 +193,7 @@ def tidy(clip: np.ndarray, sr: int) -> np.ndarray:
     from scipy.signal import butter, sosfiltfilt
 
     clip = sosfiltfilt(butter(4, HIGHPASS_HZ, btype="highpass", fs=sr, output="sos"), clip).astype(np.float32)
-    _, (a, b) = librosa.effects.trim(clip, top_db=45)
+    _, (a, b) = librosa.effects.trim(clip, top_db=top_db)
     guard = int(0.02 * sr)
     clip = clip[max(a - guard, 0): min(b + guard, len(clip))].copy()
     n = int(FADE_S * sr)
@@ -248,6 +248,26 @@ def load_recording(path: Path, numbers: list, min_gap_s: float, log: dict) -> di
         else:
             gaps.append(round(gap, 2))
             groups.append([int(start), int(end)])
+    # Drop blips that aren't speech: very short or far quieter than the rest
+    # (a breath or a lip click before the first line or after the last).
+    levels = [20 * np.log10(np.sqrt(np.mean(audio[s:e] ** 2)) + 1e-9) for s, e in groups]
+    median_level = float(np.median(levels))
+    kept = [(g, lv) for g, lv in zip(groups, levels) if (g[1] - g[0]) / SR >= 0.3 and lv > median_level - 15]
+    for g, lv in zip(groups, levels):
+        if (g, lv) not in kept:
+            print(f"recording: dropped a {(g[1] - g[0]) / SR:.2f}s blip at {g[0] / SR:.2f}s ({lv:.0f} dB)", flush=True)
+    groups = [g for g, _ in kept]
+    # A reader's mid-line pause can exceed min_gap; if there are a few pieces
+    # too many, join the tightest gaps (a mid-line pause is shorter than the
+    # pause between lines) and say so, so the join can be checked by ear.
+    while len(numbers) < len(groups) <= len(numbers) + 3:
+        gaps_now = [(groups[i + 1][0] - groups[i][1]) / SR for i in range(len(groups) - 1)]
+        i = int(np.argmin(gaps_now))
+        print(f"recording: joined the pieces at {groups[i][1] / SR:.2f}s and {groups[i + 1][0] / SR:.2f}s "
+              f"(gap {gaps_now[i]:.2f}s, the tightest) into one line", flush=True)
+        groups[i] = [groups[i][0], groups[i + 1][1]]
+        del groups[i + 1]
+    gaps = [round((groups[i + 1][0] - groups[i][1]) / SR, 2) for i in range(len(groups) - 1)]
     if len(groups) != len(numbers):
         raise RuntimeError(
             f"{path.name}: found {len(groups)} spoken segments for {len(numbers)} script lines "
@@ -356,6 +376,18 @@ def main():
             ap.error("--route recording needs --recording FILE_OR_FOLDER")
         numbers = [ln["n"] for lines in sections.values() for ln in lines]
         raw = load_recording(Path(args.recording), numbers, args.min_gap, log)
+        # Trim each line where it falls to 10 dB above the room noise. A fixed
+        # -45 dB (fine for TTS, whose silence is near-digital) sits right at a
+        # real room's floor and would leave the split padding in, lengthening
+        # every pause with room tone.
+        import librosa
+
+        everything = np.concatenate(list(raw.values()))
+        frames = 20 * np.log10(librosa.feature.rms(y=everything, frame_length=1200, hop_length=600)[0] + 1e-9)
+        noise_db, peak_db = float(np.percentile(frames, 5)), float(frames.max())
+        rec_top_db = max(25.0, peak_db - (noise_db + 10))
+        print(f"recording: noise floor {noise_db:.1f} dB, peak {peak_db:.1f} dB -> trim at {rec_top_db:.1f} dB below peak",
+              flush=True)
         clips, tts_lines = {}, []
         for n, audio in raw.items():
             if args.denoise_rec > 0:
@@ -370,7 +402,7 @@ def main():
                 if rate != SR:
                     g = math.gcd(SR, rate)
                     audio = resample_poly(audio, SR // g, rate // g).astype(np.float32)
-            clips[n] = tidy(audio.astype(np.float32), SR)
+            clips[n] = tidy(audio.astype(np.float32), SR, top_db=rec_top_db)
             text = next(ln["text"] for lines in sections.values() for ln in lines if ln["n"] == n)
             tts_lines.append(f"{n} [recorded] {text}")
             print(f"line {n:2d} recorded {len(clips[n]) / SR:5.2f}s  {text[:40]}", flush=True)
