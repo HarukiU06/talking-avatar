@@ -4,7 +4,8 @@
     .venv/Scripts/python.exe event/render_sections.py S6 S1
 
 For each section: one output file (output/event/video/S<n>.mp4), skipped if
-it already exists; a fixed seed (1000 + n unless overridden with
+it already exists and was rendered from the current section WAV (a hash is
+stored beside it; a stale video is set aside and the section re-rendered); a fixed seed (1000 + n unless overridden with
 --seed S6=2006), recorded with the start time, duration and outcome in
 render_log.jsonl. Each section runs in its own child process with its output
 in S<n>.log, so a crash can't take the runner down. On an out-of-memory
@@ -49,6 +50,26 @@ DEFAULT_MIN_PER_CHUNK = 7.5
 OOM_SIGNS = ("OutOfMemoryError", "CUDA out of memory", "out of memory", "3221225477", "0xC0000005")
 
 
+def audio_hash(section: str) -> str:
+    import hashlib
+
+    return hashlib.md5((AUDIO / f"{section}.wav").read_bytes()).hexdigest()[:12]
+
+
+def is_current(section: str) -> bool:
+    """A finished section counts only if it was rendered from today's audio:
+    its .mp4 exists and the hash stored next to it matches the section WAV."""
+    out, stamp = VIDEO / f"{section}.mp4", VIDEO / f"{section}.audio_md5"
+    if not (out.exists() and out.stat().st_size > 0):
+        return False
+    if stamp.exists() and stamp.read_text().strip() == audio_hash(section):
+        return True
+    stale = VIDEO / f"{section}.stale-{datetime.now():%m%d-%H%M%S}.mp4"
+    out.replace(stale)
+    print(f"[{section}] its audio changed since it was rendered - kept the old video as {stale.name}, re-rendering")
+    return False
+
+
 def chunks_for(seconds: float) -> int:
     frames = math.ceil(seconds * 25)
     return 1 + max(0, math.ceil((frames - 81) / 72))
@@ -63,6 +84,7 @@ def render_one(section: str, seed: int) -> None:
     ma.render_infinitetalk(str(PHOTO), str(AUDIO / f"{section}.wav"), str(out), scene_prompt=SCENE_PROMPT,
                            size="480", sample_steps=STEPS, accel="lightx2v", seed=seed)
     out.replace(VIDEO / f"{section}.mp4")
+    (VIDEO / f"{section}.audio_md5").write_text(audio_hash(section))
 
 
 def log_event(**fields) -> None:
@@ -98,11 +120,11 @@ def main() -> int:
     print(f"Rendering {' '.join(args.sections)} at 704x576 (InfiniteTalk 480p bucket), lightx2v {STEPS} steps")
     for i, section in enumerate(args.sections):
         out = VIDEO / f"{section}.mp4"
-        remaining = [s for s in args.sections[i:] if not (VIDEO / f"{s}.mp4").exists()]
-        eta = sum(LOAD_MIN + chunks[s] * min_per_chunk for s in remaining)
-        if out.exists() and out.stat().st_size > 0:
+        if is_current(section):
             print(f"[{section}] already done, skipping")
             continue
+        remaining = [s for s in args.sections[i:] if not (VIDEO / f"{s}.mp4").exists()]
+        eta = sum(LOAD_MIN + chunks[s] * min_per_chunk for s in remaining)
         print(f"\n[{section}] {durations[section]:.1f}s audio, {chunks[section]} chunks, seed {seeds[section]} "
               f"- ETA for what's left: {eta:.0f} min (done around {datetime.fromtimestamp(time.time() + eta * 60):%H:%M})",
               flush=True)
@@ -125,7 +147,7 @@ def main() -> int:
             log_event(section=section, seed=seeds[section], attempt=attempt, status=status,
                       started=datetime.fromtimestamp(start).isoformat(timespec="seconds"),
                       minutes=round(minutes, 1), audio_s=round(durations[section], 2), chunks=chunks[section],
-                      steps=STEPS, size="704x576", scene_prompt=SCENE_PROMPT)
+                      steps=STEPS, size="704x576", audio_md5=audio_hash(section), scene_prompt=SCENE_PROMPT)
             print(f"[{section}] attempt {attempt}: {status} after {minutes:.1f} min (log: {section_log})", flush=True)
             if status == "ok":
                 measured = max(minutes - LOAD_MIN, 0.5) / chunks[section]
