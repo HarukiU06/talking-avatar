@@ -24,3 +24,6 @@ __pycache__/
 
 CLAUDE.md
 .claude/
+
+# Human voice recordings for the event video (personal data, not for the repo)
+recordings/
