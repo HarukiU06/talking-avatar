@@ -72,7 +72,10 @@ python -m pip install "torch>=2.7,<2.9" "torchaudio>=2.7,<2.9" --index-url https
 # an unpinned install resolves to 5.x and then fails at import time with
 # "cannot import name 'isin_mps_friendly'". Pinning here rather than after
 # the fact avoids downloading a transformers/tokenizers pair twice.
-python -m pip install coqui-tts soundfile "transformers>=4.43,<5"
+# The [ja] extra brings cutlet/fugashi/unidic-lite, which XTTS needs to read
+# Japanese text; without it --tts xtts --lang ja dies with
+# "No module named 'cutlet'".
+python -m pip install "coqui-tts[ja]" soundfile "transformers>=4.43,<5"
 
 # 4. Pre-download the XTTS-v2 checkpoint (~2GB) so the first real run doesn't
 # stall on it. COQUI_TOS_AGREED is the non-interactive equivalent of the
