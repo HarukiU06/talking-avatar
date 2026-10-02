@@ -334,6 +334,29 @@ python make_avatar.py --config config.yaml
 
 Each entry in the config produces its own `.mp4` in `output/`.
 
+### 2D puppet avatar (`avatar2d/`)
+
+This is a cartoon alternative to the photoreal engines. It turns the photo into a cel-shaded
+illustration and builds a sprite rig from it: 5 expressions × 6 mouth shapes × 3 eye states,
+each made with LivePortrait retargeting. It then animates the rig to a finished soundtrack.
+Each line's expression comes from a local emotion classifier, which you can override per line
+in `event/expressions.txt`. Rendering takes about 40 s for the 110 s event reading, compared
+with hours for InfiniteTalk. It currently drives the event script
+(`event/script.txt` + `readings_ja.txt` + `output/event/audio/full.wav`).
+
+```bash
+./setup_avatar2d.sh                                               # once: AnimeGANv2 + xlm-emo-t
+.venv-liveportrait/Scripts/python.exe avatar2d/stylize.py         # style candidates -> output/avatar2d/style/sheet.jpg
+.venv-liveportrait/Scripts/python.exe avatar2d/build_rig.py       # rig from style/cel.png -> output/avatar2d/rig/sheet.jpg
+.venv/Scripts/python.exe avatar2d/expressions.py                  # per-line expressions -> output/avatar2d/expressions.json
+.venv/Scripts/python.exe avatar2d/animate.py [--seconds 15]       # -> output/avatar2d/event_avatar2d.mp4
+```
+
+To use a different style, pass `--src output/avatar2d/style/face_paint.png` to `build_rig.py`. To tune the
+faces, edit the `EXPRESSIONS` / `MOUTHS` / `EYES` presets at the top of `build_rig.py` and re-run it.
+Mouth shapes come from the kana readings and are spread evenly over the voiced frames, so
+the sync is approximate. It looks right for mora-timed Japanese, but less so for the English line.
+
 ## 5. Supported languages
 
 Chatterbox Multilingual V3 supports: `ar` Arabic, `da` Danish, `de` German,
