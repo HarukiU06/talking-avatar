@@ -1,0 +1,8 @@
+# Facial expression overrides for the 2D puppet (avatar2d/expressions.py).
+# Lines not listed here use the emotion classifier's pick; see
+# output/avatar2d/expressions.json for what it chose and why.
+# Format: <line number> <neutral|smile|happy|surprised|concerned>
+5 smile
+7 smile
+15 neutral
+18 smile
