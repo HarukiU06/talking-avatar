@@ -32,6 +32,20 @@ for w in ('face_paint_512_v2', 'paprika'):
 print('AnimeGANv2 ok')
 "
 
+# Disney/Pixar-style 3D cartoon look (avatar2d/cartoonize.py, ~10 GB): an SDXL
+# 3D-cartoon checkpoint + IP-Adapter plus-face. Runs in .venv-infinitetalk, which
+# already has CUDA torch + diffusers; skipped if that venv isn't set up.
+if [ -d .venv-infinitetalk ]; then
+  py .venv-infinitetalk -c "
+from huggingface_hub import snapshot_download as d
+d('GHArt/Samaritan_3d_Cartoon_V4.0_xl_fp16')
+d('h94/IP-Adapter', allow_patterns=['sdxl_models/ip-adapter-plus-face_sdxl_vit-h.safetensors', 'models/image_encoder/*'])
+print('3D cartoon models ok')
+"
+else
+  echo "(.venv-infinitetalk missing: skipping the 3D cartoon models; run setup_infinitetalk.sh to enable cartoonize.py)"
+fi
+
 # Multilingual emotion classifier (joy / anger / fear / sadness).
 py .venv -c "
 from transformers import pipeline

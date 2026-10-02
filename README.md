@@ -336,26 +336,32 @@ Each entry in the config produces its own `.mp4` in `output/`.
 
 ### 2D puppet avatar (`avatar2d/`)
 
-This is a cartoon alternative to the photoreal engines. It turns the photo into a cel-shaded
-illustration and builds a sprite rig from it: 5 expressions × 6 mouth shapes × 3 eye states,
-each made with LivePortrait retargeting. It then animates the rig to a finished soundtrack.
-Each line's expression comes from a local emotion classifier, which you can override per line
-in `event/expressions.txt`. Rendering takes about 40 s for the 110 s event reading, compared
-with hours for InfiniteTalk. It currently drives the event script
+A cartoon alternative to the photoreal engines. It turns the photo into a Disney/Pixar-style 3D-cartoon
+character (or a flatter cel-shaded drawing) and builds a sprite rig from it: 5 expressions × 6 mouth
+shapes × 3 eye states, each made with LivePortrait retargeting. It then animates the rig to a finished
+soundtrack. Each line's expression comes from a local emotion classifier, which you can override per
+line in `event/expressions.txt`. Rendering takes about 40 s for the 110 s event reading, compared with
+hours for InfiniteTalk. It currently drives the event script
 (`event/script.txt` + `readings_ja.txt` + `output/event/audio/full.wav`).
 
 ```bash
-./setup_avatar2d.sh                                               # once: AnimeGANv2 + xlm-emo-t
-.venv-liveportrait/Scripts/python.exe avatar2d/stylize.py         # style candidates -> output/avatar2d/style/sheet.jpg
-.venv-liveportrait/Scripts/python.exe avatar2d/build_rig.py       # rig from style/cel.png -> output/avatar2d/rig/sheet.jpg
-.venv/Scripts/python.exe avatar2d/expressions.py                  # per-line expressions -> output/avatar2d/expressions.json
-.venv/Scripts/python.exe avatar2d/animate.py [--seconds 15]       # -> output/avatar2d/event_avatar2d.mp4
+./setup_avatar2d.sh      # once: SDXL 3D-cartoon checkpoint + IP-Adapter (~10 GB), AnimeGANv2, xlm-emo-t
+
+# Look: 3D cartoon candidates -> output/avatar2d/style/pixar_sheet.jpg (runs in .venv-infinitetalk for its diffusers)
+.venv-infinitetalk/Scripts/python.exe avatar2d/cartoonize.py --strengths 0.7 --seeds 1,2,3,4 --ip-scale 0.3
+.venv-liveportrait/Scripts/python.exe avatar2d/build_rig.py --preset cartoon3d     --src output/avatar2d/style/pixar_s0.70_4.png --out output/avatar2d/rig_pixar     # -> rig_pixar/sheet.jpg
+.venv/Scripts/python.exe avatar2d/expressions.py                                     # -> output/avatar2d/expressions.json
+.venv/Scripts/python.exe avatar2d/animate.py --rig output/avatar2d/rig_pixar     --out output/avatar2d/event_avatar_pixar.mp4 [--seconds 15]
 ```
 
-To use a different style, pass `--src output/avatar2d/style/face_paint.png` to `build_rig.py`. To tune the
-faces, edit the `EXPRESSIONS` / `MOUTHS` / `EYES` presets at the top of `build_rig.py` and re-run it.
-Mouth shapes come from the kana readings and are spread evenly over the voiced frames, so
-the sync is approximate. It looks right for mora-timed Japanese, but less so for the English line.
+For the flat cel-shaded look, run `avatar2d/stylize.py` in `.venv-liveportrait`, then `build_rig.py`
+with its defaults (`--preset flat`, `style/cel.png`), then `animate.py`.
+
+In `cartoonize.py`, a higher `--strengths` value gives a more cartoony face but less likeness, and a
+higher `--ip-scale` pulls the face harder toward her real one, which also copies the tension in her brows.
+To tune the faces, edit `PRESETS` at the top of `build_rig.py` and re-run it (under a minute).
+Mouth shapes come from the kana readings and are spread evenly over the voiced frames, so the sync is
+approximate. It looks right for mora-timed Japanese, but less so for the English line.
 
 ## 5. Supported languages
 

@@ -13,7 +13,7 @@ animate.py composites it onto base.png and can crossfade any two cleanly.
 Writes output/avatar2d/rig/: base.png, sprites/<expr>_<mouth>_<eyes>.png (face
 box only), rig.json, and sheet.jpg (expression x mouth, eyes open) + eyes.jpg.
 
-Tune the look in EXPRESSIONS / MOUTHS / EYES below and re-run; a full rig is
+Tune the look in PRESETS / EYES below and re-run; a full rig is
 90 sprites, well under a minute on the GPU.
 """
 import argparse
@@ -30,26 +30,53 @@ import torch
 sys.stdout.reconfigure(encoding="utf-8")  # LivePortrait's rich logging vs cp932 consoles
 ROOT = Path(__file__).resolve().parent.parent
 LP_DIR = Path(os.environ.get("LIVEPORTRAIT_DIR", ROOT / "LivePortrait")).resolve()
-OUT = ROOT / "output" / "avatar2d" / "rig"
 
-# Slider values per state, in the LivePortrait app's units. Expression and mouth
-# values add up; eye/lip ratios are targets (None = keep the source's own).
-EXPRESSIONS = {
-    "neutral":   {},
-    "smile":     {"smile": 0.9},
-    "happy":     {"smile": 1.3, "eyebrow": 10},
-    "surprised": {"eyebrow": 25, "eye_ratio_add": 0.12},
-    "concerned": {"eyebrow": -22, "smile": -0.25},
+# Slider values per state, in the LivePortrait app's units, one table per look
+# (--preset). Expression and mouth values add up; lip_ratio is a target opening;
+# eyes are a fraction of the source's own eye opening (None = unchanged).
+# Keys: smile, eyebrow, grin (lip_variation_two), purse (lip_variation_one:
+# + rounds the lips, - widens them), pout (lip_variation_zero; it shifts a lip
+# point sideways, so it reads lopsided on a big cartoon mouth).
+PRESETS = {
+    # Cel-shaded drawing (style/cel.png): small features, needs strong values to read.
+    "flat": {
+        "expressions": {
+            "neutral":   {},
+            "smile":     {"smile": 0.9},
+            "happy":     {"smile": 1.3, "eyebrow": 10},
+            "surprised": {"eyebrow": 25, "eye_ratio_add": 0.12},
+            "concerned": {"eyebrow": -22, "smile": -0.25},
+        },
+        "mouths": {
+            "closed": {},
+            "a": {"lip_ratio": 0.45},
+            "i": {"grin": 10, "lip_ratio": 0.15},
+            "u": {"pout": 0.09, "lip_ratio": 0.12},
+            "e": {"grin": 7, "lip_ratio": 0.3},
+            "o": {"pout": 0.05, "lip_ratio": 0.38},
+        },
+    },
+    # Disney/Pixar-style 3D cartoon (cartoonize.py): big features move a lot, so
+    # gentler values; eyebrow +10 everywhere relaxes the model's worried-brow habit.
+    "cartoon3d": {
+        "expressions": {
+            "neutral":   {"eyebrow": 10},
+            "smile":     {"smile": 0.5, "eyebrow": 10},
+            "happy":     {"smile": 0.9, "eyebrow": 15},
+            "surprised": {"eyebrow": 25, "eye_ratio_add": 0.08},
+            "concerned": {"eyebrow": -8, "smile": -0.15},
+        },
+        "mouths": {
+            "closed": {},
+            "a": {"lip_ratio": 0.32},
+            "i": {"purse": -8, "lip_ratio": 0.12},
+            "u": {"purse": 10, "lip_ratio": 0.12},
+            "e": {"purse": -4, "lip_ratio": 0.22},
+            "o": {"purse": 14, "lip_ratio": 0.24},
+        },
+    },
 }
-MOUTHS = {
-    "closed": {},
-    "a": {"lip_ratio": 0.45},
-    "i": {"grin": 10, "lip_ratio": 0.15},
-    "u": {"pout": 0.09, "lip_ratio": 0.12},
-    "e": {"grin": 7, "lip_ratio": 0.3},
-    "o": {"pout": 0.05, "lip_ratio": 0.38},
-}
-EYES = {"open": None, "half": 0.24, "closed": 0.0}
+EYES = {"open": None, "half": 0.6, "closed": 0.0}
 
 
 def load_pipeline():
@@ -102,12 +129,14 @@ class Rigger:
             delta = self.p.update_delta_new_eyebrow(torch.tensor(s["eyebrow"], device=dev), delta)
         if s.get("pout"):
             delta = self.p.update_delta_new_lip_variation_zero(torch.tensor(s["pout"], device=dev), delta)
+        if s.get("purse"):
+            delta = self.p.update_delta_new_lip_variation_one(torch.tensor(s["purse"], device=dev), delta)
         if s.get("grin"):
             delta = self.p.update_delta_new_lip_variation_two(torch.tensor(s["grin"], device=dev), delta)
         R = self.R_s.to(dev)
         x_d = self.info["scale"].to(dev) * (self.info["kp"].to(dev) @ R + delta) + self.info["t"].to(dev)
         x_s = self.x_s.to(dev)
-        eye = s.get("eye_ratio")
+        eye = s["eye_frac"] * self.src_eye if s.get("eye_frac") is not None else None
         if eye is None and s.get("eye_ratio_add"):
             eye = self.src_eye + s["eye_ratio_add"]
         if eye is not None:
@@ -124,7 +153,7 @@ def combine(expr: dict, mouth: dict, eye_target) -> dict:
     for k, v in mouth.items():
         s[k] = s.get(k, 0) + v
     if eye_target is not None:  # a blink overrides the expression's eye opening
-        s["eye_ratio"] = eye_target
+        s["eye_frac"] = eye_target
         s.pop("eye_ratio_add", None)
     return s
 
@@ -132,9 +161,13 @@ def combine(expr: dict, mouth: dict, eye_target) -> dict:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", default=str(ROOT / "output" / "avatar2d" / "style" / "cel.png"))
+    ap.add_argument("--preset", default="flat", choices=list(PRESETS))
+    ap.add_argument("--out", default=str(ROOT / "output" / "avatar2d" / "rig"))
     a = ap.parse_args()
+    out_dir = Path(a.out).resolve()
+    EXPRESSIONS, MOUTHS = PRESETS[a.preset]["expressions"], PRESETS[a.preset]["mouths"]
     src = Path(a.src).resolve()
-    (OUT / "sprites").mkdir(parents=True, exist_ok=True)
+    (out_dir / "sprites").mkdir(parents=True, exist_ok=True)
     img = cv2.cvtColor(cv2.imread(str(src)), cv2.COLOR_BGR2RGB)
 
     rig = Rigger(load_pipeline(), img)
@@ -145,7 +178,7 @@ def main():
     x0, y0, x1, y1 = box
     print(f"source eye ratio {rig.src_eye:.2f}, lip ratio {rig.src_lip:.2f}; face box {box}")
 
-    cv2.imwrite(str(OUT / "base.png"), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+    cv2.imwrite(str(out_dir / "base.png"), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
     worst_outside = 0
     tiles = {}
     for (en, e), (mn, m), (yn, y) in itertools.product(EXPRESSIONS.items(), MOUTHS.items(), EYES.items()):
@@ -154,12 +187,12 @@ def main():
         outside[y0:y1, x0:x1] = img[y0:y1, x0:x1]
         worst_outside = max(worst_outside, int(np.abs(outside.astype(int) - img).max()))
         face = full[y0:y1, x0:x1]
-        cv2.imwrite(str(OUT / "sprites" / f"{en}_{mn}_{yn}.png"), cv2.cvtColor(face, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(str(out_dir / "sprites" / f"{en}_{mn}_{yn}.png"), cv2.cvtColor(face, cv2.COLOR_RGB2BGR))
         tiles[en, mn, yn] = face
     print(f"{len(tiles)} sprites; max pixel change outside the face box: {worst_outside} (should be 0)")
 
-    (OUT / "rig.json").write_text(json.dumps({
-        "source": str(src), "size": [img.shape[1], img.shape[0]], "box": box,
+    (out_dir / "rig.json").write_text(json.dumps({
+        "source": str(src), "preset": a.preset, "size": [img.shape[1], img.shape[0]], "box": box,
         "expressions": EXPRESSIONS, "mouths": MOUTHS, "eyes": EYES,
         "source_eye_ratio": rig.src_eye, "source_lip_ratio": rig.src_lip,
     }, indent=1), encoding="utf-8")
@@ -169,10 +202,10 @@ def main():
         cv2.putText(t, label, (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
         return t
     rows = [np.hstack([tile(tiles[en, mn, "open"], f"{en}/{mn}") for mn in MOUTHS]) for en in EXPRESSIONS]
-    cv2.imwrite(str(OUT / "sheet.jpg"), np.vstack(rows), [cv2.IMWRITE_JPEG_QUALITY, 88])
-    cv2.imwrite(str(OUT / "eyes.jpg"), np.hstack([tile(tiles["neutral", "closed", yn], yn) for yn in EYES]),
+    cv2.imwrite(str(out_dir / "sheet.jpg"), np.vstack(rows), [cv2.IMWRITE_JPEG_QUALITY, 88])
+    cv2.imwrite(str(out_dir / "eyes.jpg"), np.hstack([tile(tiles["neutral", "closed", yn], yn) for yn in EYES]),
                 [cv2.IMWRITE_JPEG_QUALITY, 88])
-    print("wrote", OUT)
+    print("wrote", out_dir)
 
 
 if __name__ == "__main__":
