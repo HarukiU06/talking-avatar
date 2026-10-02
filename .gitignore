@@ -27,3 +27,6 @@ CLAUDE.md
 
 # Human voice recordings for the event video (personal data, not for the repo)
 recordings/
+
+# 2D puppet avatar model downloads (setup_avatar2d.sh)
+avatar2d/weights/
