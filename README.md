@@ -348,8 +348,8 @@ hours for InfiniteTalk. It currently drives the event script
 ./setup_avatar2d.sh      # once: SDXL 3D-cartoon checkpoint + IP-Adapter (~10 GB), AnimeGANv2, xlm-emo-t
 
 # Look: 3D cartoon candidates -> output/avatar2d/style/pixar_sheet.jpg (runs in .venv-infinitetalk for its diffusers)
-.venv-infinitetalk/Scripts/python.exe avatar2d/cartoonize.py --strengths 0.7 --seeds 1,2,3,4 --ip-scale 0.3
-.venv-liveportrait/Scripts/python.exe avatar2d/build_rig.py --preset cartoon3d     --src output/avatar2d/style/pixar_s0.70_4.png --out output/avatar2d/rig_pixar     # -> rig_pixar/sheet.jpg
+.venv-infinitetalk/Scripts/python.exe avatar2d/cartoonize.py      # 6 seeds; pick one with straight-ahead eyes
+.venv-liveportrait/Scripts/python.exe avatar2d/build_rig.py --preset cartoon3d     --src output/avatar2d/style/pixar_s0.70_2.png --out output/avatar2d/rig_pixar     # -> rig_pixar/sheet.jpg
 .venv/Scripts/python.exe avatar2d/expressions.py                                     # -> output/avatar2d/expressions.json
 .venv/Scripts/python.exe avatar2d/animate.py --rig output/avatar2d/rig_pixar     --out output/avatar2d/event_avatar_pixar.mp4 [--seconds 15]
 ```

@@ -57,14 +57,16 @@ PRESETS = {
         },
     },
     # Disney/Pixar-style 3D cartoon (cartoonize.py): big features move a lot, so
-    # gentler values; eyebrow +10 everywhere relaxes the model's worried-brow habit.
+    # gentler values. The model draws inner brows tilted down (reads as angry); an
+    # eyebrow raise of +20 everywhere relaxes them into a soft arch (+30 already
+    # reads as surprised), and "concerned" only dips a little below that.
     "cartoon3d": {
         "expressions": {
-            "neutral":   {"eyebrow": 10},
-            "smile":     {"smile": 0.5, "eyebrow": 10},
-            "happy":     {"smile": 0.9, "eyebrow": 15},
-            "surprised": {"eyebrow": 25, "eye_ratio_add": 0.08},
-            "concerned": {"eyebrow": -8, "smile": -0.15},
+            "neutral":   {"eyebrow": 20},
+            "smile":     {"smile": 0.5, "eyebrow": 20},
+            "happy":     {"smile": 0.9, "eyebrow": 22},
+            "surprised": {"eyebrow": 35, "eye_ratio_add": 0.08},
+            "concerned": {"eyebrow": 8, "smile": -0.15},
         },
         "mouths": {
             "closed": {},
