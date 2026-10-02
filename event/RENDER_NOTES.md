@@ -4,6 +4,7 @@ Final files (not in git, under `output/event/final/`):
 - `event_subtitled_en.mp4`: 1920x1080, 25 fps, H.264 yuv420p + AAC 48 kHz, 110.80 s, English subtitles + lower-third 「司会 AI晶子」 (first 5 s of line 2)
 - `event_clean.mp4`: same, no text
 - `subtitles_en.srt` / `subtitles_en.ass`: the subtitles on their own
+- `event_matrix_subtitled_en.mp4` / `event_matrix_clean.mp4`: the same two with the wall replaced by Matrix-style green digital rain on black
 
 Video and audio are both 110.800 s (2770 frames). It ends with a hard cut after line 18's 「と——」.
 
@@ -16,6 +17,7 @@ Video and audio are both 110.800 s (2770 frames). It ends with a hard cut after 
 | Render | `event/render_sections.py S<n>` | InfiniteTalk, `--infinitetalk-accel lightx2v` (4 steps, text CFG 1, audio CFG 2, shift 2), fp8 + low VRAM, 480p bucket = 704x576, streaming, motion_frame 9 |
 | Checks | `event/check_section.py S<n>` | contact sheet + metrics in `output/event/check/` |
 | Assembly | `event/assemble.py` | 6-frame dissolves centred on section boundaries, clean `full.wav` as the soundtrack |
+| Matrix version | `.venv-latentsync/Scripts/python.exe event/matte_sections.py`, then `event/assemble.py --background matrix` | Person matte per section (mediapipe selfie mask + colour key against a fitted wall plate, edges un-mixed) cached in `output/event/matte/`; seeded two-layer katakana rain. Re-run the matte for any re-rendered section. `--seconds N` for a quick look |
 
 Scene prompt (all sections): "The person faces the camera as a poised event host: calm friendly expression, steady eye contact, small nods at phrase ends, natural blinking, a slight smile on jokes, mouth relaxed and closed in pauses. Static camera, chest-up, soft even lighting, no hand gestures."
 
