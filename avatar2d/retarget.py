@@ -21,6 +21,12 @@ that motion frame by frame and re-poses the cartoon face with it.
 - On top: the rig preset's eyebrow raise (the cartoon model draws angry-looking
   inner brows) and each line's expression from expressions.json (smile/brow
   offsets, crossfaded by the timeline animate.py exports).
+- Gaze: the cartoon's irises sit high under its lids, so even with the
+  driving gaze it stares upward. Every frame lowers the irises (--gaze-y, on
+  LivePortrait's gaze keypoints 11/15) and, since those keypoints also pull the
+  lids down, re-opens the eyes (--eye-open x the source's eye opening). That
+  re-opening is faded out by the driving face's own eye opening (its landmarks,
+  every frame), so the photoreal video's blinks still close her eyes fully.
 - Streams both passes through ffmpeg; the 1080p driving video never sits in RAM.
 
 Writes output/avatar2d/event_avatar_live.mp4 with output/event/audio/full.wav.
@@ -79,6 +85,10 @@ def main():
     ap.add_argument("--motion-scale", type=float, default=1.0, help="scale the transferred motion")
     ap.add_argument("--smile-scale", type=float, default=0.6,
                     help="how much of each line's preset smile to add (the driving face already smiles on jokes)")
+    ap.add_argument("--gaze-y", type=float, default=-10,
+                    help="lower the irises (LivePortrait gaze units, negative = down) so she looks straight ahead")
+    ap.add_argument("--eye-open", type=float, default=1.25,
+                    help="eye opening while not blinking, x the source's; offsets the lid drop of --gaze-y")
     ap.add_argument("--seconds", type=float, help="render only the first N seconds (preview)")
     a = ap.parse_args()
 
@@ -101,18 +111,21 @@ def main():
     p, w, dev = rig.p, rig.w, rig.w.device
     from src.utils.camera import get_rotation_matrix
     from src.utils.crop import paste_back
+    from src.utils.retargeting_utils import calc_eye_close_ratio
 
     # Pass 1: driving motion, fixed crop from frame 0.
     M_o2c = None
-    ang, exp, sc, tr = [], [], [], []
+    ang, exp, sc, tr, eye = [], [], [], [], []
     for i, fr in enumerate(frames(driving, W, H, n)):
         if M_o2c is None:
             crop = p.cropper.crop_source_image(fr, p.cropper.crop_cfg)
             if crop is None:
                 raise SystemExit("no face in the driving video's first frame")
             M_o2c = crop["M_o2c"][:2]
-        c = cv2.resize(cv2.warpAffine(fr, M_o2c, (512, 512), flags=cv2.INTER_AREA), (256, 256),
-                       interpolation=cv2.INTER_AREA)
+        c512 = cv2.warpAffine(fr, M_o2c, (512, 512), flags=cv2.INTER_AREA)
+        c = cv2.resize(c512, (256, 256), interpolation=cv2.INTER_AREA)
+        lmk = p.cropper.calc_lmk_from_cropped_image(c512)
+        eye.append(float(calc_eye_close_ratio(lmk[None]).mean()) if lmk is not None else np.nan)
         with torch.no_grad():
             info = w.get_kp_info(w.prepare_source(c))
         ang.append([float(info["pitch"]), float(info["yaw"]), float(info["roll"])])
@@ -124,6 +137,10 @@ def main():
     n = len(ang)
     ang, sc, tr = gauss(np.array(ang), SIGMA_POSE), gauss(np.array(sc), SIGMA_POSE), gauss(np.array(tr), SIGMA_POSE)
     exp = gauss(np.array(exp), SIGMA_EXP)
+    # 1 while the driving eyes are normally open, 0 once they're under 40% of that (a blink).
+    eye = np.array(eye)
+    eye = np.where(np.isnan(eye), np.nanmedian(eye), eye) / np.nanmedian(eye)
+    eyes_open = gauss(np.clip((eye - 0.4) / 0.5, 0, 1), SIGMA_EXP)
 
     # Pass 2: re-pose the cartoon.
     T = lambda x: torch.as_tensor(np.asarray(x, np.float32), device=dev)
@@ -135,6 +152,7 @@ def main():
     t_s0 = t_s.clone()
     t_s0[..., 2] = 0
     x_d0 = scale_s * (kp_s @ R_s + exp_s) + t_s0
+    eye_delta = w.retarget_eye(x_s, w.calc_combined_eye_ratio([[rig.src_eye * a.eye_open]], rig.lmk))
 
     enc = subprocess.Popen(
         ["ffmpeg", "-loglevel", "error", "-y",
@@ -152,11 +170,13 @@ def main():
                 delta = p.update_delta_new_smile(T(smile[i]), delta)
             if brow[i]:
                 delta = p.update_delta_new_eyebrow(T(brow[i]), delta)
+            delta[0, 11, 1] += a.gaze_y * -0.001   # gaze_y on the iris keypoints only (the app's
+            delta[0, 15, 1] += a.gaze_y * -0.001   # gaze slider also adds a lid-closing term)
             scale_new = scale_s * float(sc[i] / sc[0])
             t_new = t_s + T(tr[i] - tr[0])[None]
             t_new[..., 2] = 0
             x_d = scale_new * (kp_s @ R_new + delta) + t_new
-            x_d = x_s + (x_d - x_d0) * a.motion_scale
+            x_d = x_s + (x_d - x_d0) * a.motion_scale + float(eyes_open[i]) * eye_delta
             x_d = w.stitching(x_s, x_d)
             face = w.parse_output(w.warp_decode(f_s, x_s, x_d)["out"])[0]
             enc.stdin.write(paste_back(face, rig.M_c2o, img, rig.mask).tobytes())
