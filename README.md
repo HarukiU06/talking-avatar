@@ -364,6 +364,20 @@ It adds the rig preset's brow relax and each line's expression on top. It takes 
 .venv-liveportrait/Scripts/python.exe avatar2d/retarget.py [--seconds 15]   # -> output/avatar2d/event_avatar_live.mp4
 ```
 
+**Chibi stage-visual version:** `chibi.py` draws her as a flat chibi mascot in the style of a reference
+visual (`photos/image.jpg`: blue monochrome tint, dark sparkly stage background), on its own layer over
+a clean copy of that background. A flat drawing has nothing for LivePortrait to warp, because its mouth is a
+single line. So `chibi_animate.py` redraws the mouth and eyelids every frame in the drawing's style, and moves the
+head with a smooth neck deformer, like a Live2D model. All of it is driven by the photoreal event performance
+(her real mouth opening, blinks and head pose), plus the per-line expressions:
+
+```bash
+.venv-infinitetalk/Scripts/python.exe avatar2d/chibi.py                 # candidates -> output/avatar2d/style/chibi_sheet.jpg
+.venv-liveportrait/Scripts/python.exe avatar2d/drive_signals.py         # motion curves -> output/avatar2d/drive.npz
+.venv/Scripts/python.exe avatar2d/chibi_animate.py [--layer output/avatar2d/style/chibi_3_rgba.png]
+                                                                        # -> output/avatar2d/event_avatar_chibi.mp4 (1920x1280)
+```
+
 For the flat cel-shaded look, run `avatar2d/stylize.py` in `.venv-liveportrait`, then `build_rig.py`
 with its defaults (`--preset flat`, `style/cel.png`), then `animate.py`.
 

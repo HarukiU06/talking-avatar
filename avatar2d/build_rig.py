@@ -77,6 +77,25 @@ PRESETS = {
             "o": {"purse": 14, "lip_ratio": 0.24},
         },
     },
+    # Flat chibi mascot (chibi.py): tiny features; the brows hide under the bangs,
+    # so expressions are mostly the mouth, kept gentle.
+    "chibi": {
+        "expressions": {
+            "neutral":   {},
+            "smile":     {"smile": 0.4},
+            "happy":     {"smile": 0.8},
+            "surprised": {"eyebrow": 10, "eye_ratio_add": 0.05},
+            "concerned": {"eyebrow": -8, "smile": -0.1},
+        },
+        "mouths": {
+            "closed": {},
+            "a": {"lip_ratio": 0.32},
+            "i": {"purse": -8, "lip_ratio": 0.12},
+            "u": {"purse": 10, "lip_ratio": 0.12},
+            "e": {"purse": -4, "lip_ratio": 0.22},
+            "o": {"purse": 14, "lip_ratio": 0.24},
+        },
+    },
 }
 EYES = {"open": None, "half": 0.6, "closed": 0.0}
 
