@@ -17,7 +17,9 @@ expressions.py. Each frame is a blend of rig sprites plus a 2D head sway:
   shapes double-exposes into a smear) and each holds >= MOUTH_HOLD frames.
   Line 1 (English) gets a rough vowel guess from its spelling.
 - Expression: per line from expressions.json, held through the pause after
-  it, crossfaded over EXPR_FADE frames.
+  it, crossfaded over EXPR_FADE frames that end as the line starts: a fade
+  during speech blends two open mouths into a double exposure, and every
+  script pause (>= 0.4 s) is longer than the fade.
 - Eyes: seeded random blinks every 2.5-5 s, never during an expression fade.
 - Motion: slow seeded sway (rotation, shift, breathing scale) pivoting at the
   bottom centre of the face box, plus a small nod after every line.
@@ -120,7 +122,7 @@ def timeline(audio, sr, lines, kana, exprs, rig, n_frames, seed):
     for k, (ln, (t0, t1)) in enumerate(zip(lines, spans)):
         f0, f1 = int(t0 * FPS), min(int(np.ceil(t1 * FPS)), n_frames)
         next_f = int(spans[k + 1][0] * FPS) if k + 1 < len(spans) else n_frames
-        expr_idx[f0:next_f] = expr_names.index(exprs[ln["n"]])
+        expr_idx[max(f0 - EXPR_FADE // 2 - 1, 0):] = expr_names.index(exprs[ln["n"]])  # later lines overwrite
         if k == 0:
             expr_idx[:f0] = expr_idx[f0]
         nods.append(f1)
