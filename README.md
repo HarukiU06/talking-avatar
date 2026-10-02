@@ -354,6 +354,16 @@ hours for InfiniteTalk. It currently drives the event script
 .venv/Scripts/python.exe avatar2d/animate.py --rig output/avatar2d/rig_pixar --out output/avatar2d/event_avatar_pixar.mp4 [--seconds 15]
 ```
 
+**Natural motion (recommended):** the sprite puppet only cuts between fixed faces. `retarget.py` instead
+uses LivePortrait to carry the finished photoreal event video's motion (head turns, nods, blinks, lip sync,
+expressions, all rendered by InfiniteTalk for the presentation scene) frame by frame onto the cartoon.
+It adds the rig preset's brow relax and each line's expression on top. It takes about 5 min for 110 s:
+
+```bash
+.venv/Scripts/python.exe avatar2d/animate.py --rig output/avatar2d/rig_pixar --timeline-out output/avatar2d/timeline.npz
+.venv-liveportrait/Scripts/python.exe avatar2d/retarget.py [--seconds 15]   # -> output/avatar2d/event_avatar_live.mp4
+```
+
 For the flat cel-shaded look, run `avatar2d/stylize.py` in `.venv-liveportrait`, then `build_rig.py`
 with its defaults (`--preset flat`, `style/cel.png`), then `animate.py`.
 

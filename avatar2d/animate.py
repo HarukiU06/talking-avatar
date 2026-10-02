@@ -181,6 +181,7 @@ def main():
     ap.add_argument("--out", default=str(ROOT / "output" / "avatar2d" / "event_avatar2d.mp4"))
     ap.add_argument("--seconds", type=float, help="render only the first N seconds (preview)")
     ap.add_argument("--seed", type=int, default=7, help="blink and sway randomness")
+    ap.add_argument("--timeline-out", help="only write the per-frame expression weights (.npz) for retarget.py")
     a = ap.parse_args()
 
     rig_dir = Path(a.rig)
@@ -204,6 +205,10 @@ def main():
     mouth_w, expr_w, eyes, angle, dx, dy, scale = timeline(
         audio, sr, lines, readings(Path(a.readings)), exprs, rig, n_frames, a.seed)
     mouths, expr_names = list(rig["mouths"]), list(rig["expressions"])
+    if a.timeline_out:
+        np.savez(a.timeline_out, expr_w=expr_w.astype(np.float32), expr_names=np.array(expr_names))
+        print(f"wrote {a.timeline_out} ({n_frames} frames)")
+        return
 
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
