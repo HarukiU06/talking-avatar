@@ -2,7 +2,7 @@
 """Synthesize sentences with XTTS-v2. Runs inside .venv-xtts, never imported.
 
 This is the subprocess entry point make_avatar.py shells out to, following the
-same isolation rule as every other model repo in this project (see CLAUDE.md):
+same isolation rule as every other model repo in this project:
 coqui-tts pins transformers/numpy versions that conflict with chatterbox-tts in
 .venv, so the two TTS engines can never share a process.
 

@@ -82,7 +82,9 @@ python -m pip install "coqui-tts[ja]" soundfile "transformers>=4.43,<5"
 # license prompt the downloader shows on a TTY — without it this hangs
 # forever waiting on stdin when run from a script.
 echo ""
-echo "Downloading XTTS-v2 checkpoint (~2GB)..."
+echo "Downloading the XTTS-v2 checkpoint (~2GB). By continuing you accept the"
+echo "Coqui Public Model License (non-commercial use only):"
+echo "  https://huggingface.co/coqui/XTTS-v2 (see its LICENSE.txt)"
 COQUI_TOS_AGREED=1 python -c "
 from TTS.utils.manage import ModelManager
 ModelManager().download_model('tts_models/multilingual/multi-dataset/xtts_v2')

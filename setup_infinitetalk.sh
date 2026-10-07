@@ -86,7 +86,7 @@ if [ "${SKIP_FLASH_ATTN:-0}" = "1" ]; then
   FLASH_ATTN_OK=1
 elif python -m pip install "flash_attn==2.7.4.post1"; then
   FLASH_ATTN_OK=1
-else
+elif [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == cygwin* ]]; then
   # flash-attn's source tree has very deeply nested paths (its
   # composable_kernel vendor tree especially); pip's default per-user TEMP
   # location on Windows is often already ~50-70 chars deep, and combined

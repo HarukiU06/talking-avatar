@@ -89,9 +89,11 @@ fi
 
 # 4. Download LatentSync 1.5 checkpoints (NOT the repo's default 1.6 —
 # 1.6 needs 18GB VRAM for inference; 1.5 needs 8GB, which fits a 12GB GPU).
+# `hf download`, not `huggingface-cli download`: current huggingface_hub
+# releases have dropped the old command (same as setup_liveportrait.sh).
 python -m pip install "huggingface_hub[cli]"
-huggingface-cli download ByteDance/LatentSync-1.5 latentsync_unet.pt --local-dir checkpoints
-huggingface-cli download ByteDance/LatentSync-1.5 whisper/tiny.pt --local-dir checkpoints
+hf download ByteDance/LatentSync-1.5 latentsync_unet.pt --local-dir checkpoints
+hf download ByteDance/LatentSync-1.5 whisper/tiny.pt --local-dir checkpoints
 
 cd ..
 

@@ -3,7 +3,7 @@
 
 Runs inside .venv-infinitetalk with the InfiniteTalk checkout as its working
 directory, never imported by make_avatar.py (same subprocess isolation rule as
-every other model repo here - see CLAUDE.md). All arguments pass straight
+every other model repo here). All arguments pass straight
 through to generate_infinitetalk.py; this file only fixes up the process
 before handing over.
 
@@ -386,7 +386,7 @@ def build_clip_lean(dtype, device, checkpoint_path, tokenizer_path):
 
     cache_path = f"{checkpoint_path}.{str(dtype).split('.')[-1]}.safetensors"
     if not os.path.exists(cache_path):
-        state_dict = torch.load(checkpoint_path, map_location="cpu", mmap=True)
+        state_dict = torch.load(checkpoint_path, map_location="cpu", mmap=True, weights_only=True)
         state_dict = {name: (tensor.to(dtype) if tensor.is_floating_point() else tensor.clone()).contiguous()
                       for name, tensor in state_dict.items()}
         save_file(state_dict, cache_path + ".tmp")

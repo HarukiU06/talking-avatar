@@ -7,7 +7,7 @@ service, no per-video cost, your face and voice never leave your computer.
 **Pipeline:**
 1. **Text → speech in your voice** — [Chatterbox Multilingual TTS](https://github.com/resemble-ai/chatterbox) (Resemble AI, MIT license) clones your voice from a short reference clip and speaks your text in it. Your reference clip is automatically cleaned up first (downmixed to mono, resampled, silence-trimmed, level-matched) — zero-shot cloning derives your entire voice identity from that one file, so its defects are inherited by every line you generate. `--tts xtts` swaps in [XTTS-v2](https://github.com/idiap/coqui-ai-TTS) as an alternative (17 languages instead of 23 — see section 3).
 
-   **If the result doesn't sound enough like you, that is expected, and the fix is `--voice-convert`.** Zero-shot cloning has to invent natural delivery *and* imitate a specific person from a few seconds of audio, and it compromises on both — no parameter crosses that gap. `--voice-convert` adds a second stage, [Seed-VC](https://github.com/Plachtaa/seed-vc), which converts the generated speech's timbre to a reference recording of you. The TTS then only has to sound like a person talking, and Seed-VC decides who. `--voice-compare` renders the same line through every combination so you can pick by ear. Long, multi-sentence text is split into sentences and synthesized separately with a silence gap spliced between them (`--pause-ms`, default 450ms) — Chatterbox has no built-in pause control, so a whole paragraph sent in one shot comes out as one breathless run-on otherwise.
+   **If the result doesn't sound enough like you, that is expected, and the fix is `--voice-convert`.** Zero-shot cloning has to invent natural delivery *and* imitate a specific person from a few seconds of audio, and it compromises on both — no parameter crosses that gap. `--voice-convert` adds a second stage, [Seed-VC](https://github.com/Plachtaa/seed-vc), which converts the generated speech's timbre to a reference recording of you. The TTS then only has to sound like a person talking, and Seed-VC decides who. `--voice-compare` renders the same line through every combination so you can pick by ear. By default the whole text goes to the TTS in one call so intonation carries across sentences; `--pause-ms` splits it into sentences with fixed silence between them instead (see section 6).
 2. **Photo → idle-motion video** — by default, [LivePortrait](https://github.com/KwaiVGI/LivePortrait) (Kuaishou, MIT license) animates your still photo with natural head motion and blinking, driven by one of its bundled example clips (only the *motion* is transferred — the driving clip's own appearance/identity never appears in the output). The clip is short, so it's ping-pong looped to match your audio's length.
 3. **Idle-motion video + speech → final video** — [LatentSync](https://github.com/bytedance/LatentSync) (ByteDance, Apache 2.0) lip-syncs that video to the audio, regenerating only the mouth region — everything else (eyes, face shape, the head motion from step 2) is carried through unchanged.
 
@@ -17,6 +17,32 @@ For actual situational facial expression (not just lip sync — e.g. the face re
 
 You "pre-enter" one or many lines of text (in a config file), walk away, and
 come back to finished `.mp4` files.
+
+No suitable GPU? [`colab/talking_avatar_colab.ipynb`](colab/talking_avatar_colab.ipynb)
+runs the InfiniteTalk engine on Google Colab instead (see section 3).
+
+### Quick start
+
+```bash
+git clone https://github.com/HarukiU06/talking-avatar.git
+cd talking-avatar
+./setup.sh               # main environment: voice cloning (+ SadTalker)
+./setup_latentsync.sh    # default lip-sync engine
+./setup_liveportrait.sh  # default head-motion engine
+source .venv/bin/activate   # Windows (Git Bash): source .venv/Scripts/activate
+
+# put your photo in photos/me.jpg and a 25-30s voice clip in voice_samples/me.wav
+python make_avatar.py --photo photos/me.jpg --voice voice_samples/me.wav \
+  --text "Hello, this is a test of my avatar." --lang en --out output/test.mp4
+```
+
+The rest of this README covers requirements, how to record good inputs, the
+optional engines, and tuning. Contents: [1. Requirements](#1-requirements) ·
+[2. What to prepare](#2-what-to-prepare) · [3. Setup](#3-setup) ·
+[4. Usage](#4-usage) · [5. Languages](#5-supported-languages) ·
+[6. Tuning](#6-tuning-quality) · [7. Responsible use](#7-a-note-on-responsible-use) ·
+[8. Troubleshooting](#8-troubleshooting) · [9. Alternatives](#9-alternatives-if-this-doesnt-fit-your-machine) ·
+[Project layout](#project-layout) · [License](#license)
 
 ---
 
@@ -555,7 +581,7 @@ the transparency is entirely on you.
   on GitHub/HuggingFace — check your network/firewall isn't blocking those
   domains, then rerun `bash SadTalker/scripts/download_models.sh` directly.
 - **Model download fails in `setup_latentsync.sh`**: re-run the two
-  `huggingface-cli download` lines directly from inside `LatentSync/` with
+  `hf download` lines directly from inside `LatentSync/` with
   `.venv-latentsync` activated.
 - **Model download fails in `setup_liveportrait.sh`**: re-run the `hf
   download` line directly from inside `LivePortrait/` with
@@ -650,3 +676,33 @@ the transparency is entirely on you.
   (`flash_attn`). If that still isn't enough, other EMO/OmniHuman-style
   diffusion avatar models circulate on GitHub and are worth watching, but
   aren't wired into this project.
+
+## Project layout
+
+| Path | What it is |
+|---|---|
+| `make_avatar.py` | The entry point: text → voice → video, single line or `--config` batch |
+| `config.example.yaml` | Template for batch mode; copy to `config.yaml` (gitignored) |
+| `setup.sh`, `setup_*.sh` | One installer per engine, each with its own virtual environment |
+| `xtts_synth.py` | XTTS-v2 worker, run inside `.venv-xtts` by `make_avatar.py` |
+| `infinitetalk_run.py` | InfiniteTalk launcher with runtime patches, run inside `.venv-infinitetalk` |
+| `tools/measure_motion.py` | Reports how much a rendered video's face actually moves |
+| `colab/` | Google Colab notebook for the InfiniteTalk engine |
+
+Your own inputs and results (`photos/`, `voice_samples/`, `output/`,
+`config.yaml`) and every downloaded model or virtual environment are
+gitignored, as are common audio/video/image files anywhere in the tree, so a
+photo or voice recording can't be committed by accident.
+
+## License
+
+This project's own code is released under the [MIT License](LICENSE).
+
+The models it downloads and runs are **not** part of this repository and keep
+their own licenses: Chatterbox (MIT), LivePortrait (MIT), LatentSync
+(Apache 2.0), SadTalker (Apache 2.0), InfiniteTalk (Apache 2.0), Wav2Lip
+(research / non-commercial; see its repository), Seed-VC (GPL-3.0), and
+XTTS-v2 (Coqui Public Model License, non-commercial). LatentSync and
+LivePortrait also rely on InsightFace, whose pretrained face models are for
+non-commercial research only. Check the license of each engine you use before
+using its output commercially.

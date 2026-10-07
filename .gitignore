@@ -25,5 +25,22 @@ __pycache__/
 CLAUDE.md
 .claude/
 
-# Human voice recordings for the event video (personal data, not for the repo)
+# Personal recordings and media. Faces and voices are personal data: keep
+# them out of the repo even if they end up outside the folders above.
 recordings/
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.mp4
+*.mov
+*.mkv
+*.jpg
+*.jpeg
+*.png
+*.heic
+
+# Local secrets and OS clutter
+.env
+.DS_Store
+Thumbs.db

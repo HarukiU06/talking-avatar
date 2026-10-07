@@ -75,10 +75,24 @@ echo ""
 S3FD_DIR="face_detection/detection/sfd"
 S3FD_PATH="$S3FD_DIR/s3fd.pth"
 mkdir -p "$S3FD_DIR"
+# A .pth file is a pickle, and loading a pickle runs code, so the download is
+# checked before it's kept: the "619a316812" in the upstream filename is the
+# start of its SHA-256 (torch.hub's naming convention).
+S3FD_SHA256_PREFIX="619a316812"
 if [ ! -f "$S3FD_PATH" ]; then
-  curl -L --fail -o "$S3FD_PATH" \
-    "https://www.adrianbulat.com/downloads/python-fan/s3fd-619a316812.pth" || \
+  if curl -L --fail -o "$S3FD_PATH.part" \
+      "https://www.adrianbulat.com/downloads/python-fan/s3fd-${S3FD_SHA256_PREFIX}.pth"; then
+    if python -c "import hashlib, sys; sys.exit(0 if hashlib.sha256(open(sys.argv[1], 'rb').read()).hexdigest().startswith(sys.argv[2]) else 1)" \
+        "$S3FD_PATH.part" "$S3FD_SHA256_PREFIX"; then
+      mv "$S3FD_PATH.part" "$S3FD_PATH"
+    else
+      rm -f "$S3FD_PATH.part"
+      echo "WARNING: the downloaded s3fd.pth failed its checksum and was deleted — see README's Wav2Lip troubleshooting entry."
+    fi
+  else
+    rm -f "$S3FD_PATH.part"
     echo "WARNING: s3fd.pth download failed — see README's Wav2Lip troubleshooting entry for a manual link."
+  fi
 fi
 
 # 4. wav2lip_gan.pth checkpoint. Hosted on the authors' OneDrive (linked from

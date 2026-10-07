@@ -3,8 +3,10 @@
 make_avatar.py — Turn a photo + your cloned voice into a talking-head video.
 
 Pipeline:
-  1. Text  -> speech in your voice   (Chatterbox Multilingual TTS)
-  2. Photo + speech -> lip-synced video (SadTalker)
+  1. Text -> speech in your voice   (Chatterbox Multilingual TTS, or XTTS-v2;
+     optionally converted toward your voice with Seed-VC)
+  2. Photo/video + speech -> lip-synced video (LivePortrait + LatentSync by
+     default; SadTalker or InfiniteTalk with --engine)
 
 Usage:
   Single line:
@@ -238,8 +240,8 @@ def synthesize_speech_xtts(text: str, lang: str, voice_sample: str, out_wav: str
     exaggeration equivalent, so those arguments are deliberately absent
     rather than silently ignored.
 
-    Runs in .venv-xtts as a subprocess (see CLAUDE.md's cross-venv isolation
-    rule); coqui-tts and chatterbox-tts cannot coexist in one process.
+    Runs in .venv-xtts as a subprocess, like every other model here: coqui-tts
+    and chatterbox-tts pin conflicting packages and cannot share a process.
     """
     if lang not in XTTS_LANGS:
         raise ValueError(
@@ -372,7 +374,7 @@ def convert_voice(source_wav: str, target_voice: str, out_wav: str,
     job lets the TTS concentrate on sounding like a person talking, and lets
     a model built for speaker identity handle who that person is.
 
-    Runs in .venv-seedvc as a subprocess, per CLAUDE.md's cross-venv rule.
+    Runs in .venv-seedvc as a subprocess, like every other model here.
     """
     inference_py = Path(SEEDVC_DIR) / "inference.py"
     if not inference_py.exists():
@@ -953,6 +955,16 @@ def _video_duration(video) -> float:
     return float(probe.stdout.strip())
 
 
+def _concat_quote(path: str) -> str:
+    """Quote a path for an ffmpeg concat list.
+
+    The list wraps each path in single quotes, so a quote inside the path
+    (an apostrophe in a user folder name, say) has to be closed, escaped and
+    reopened, or ffmpeg misreads the rest of the line.
+    """
+    return "'" + os.path.abspath(path).replace("'", "'\\''") + "'"
+
+
 def _ping_pong_loop(video: str, duration_s: float) -> str:
     """Extend `video` to `duration_s` by alternating forward/reversed
     playback (so the loop point doesn't jump), then trim to length."""
@@ -967,8 +979,8 @@ def _ping_pong_loop(video: str, duration_s: float) -> str:
 
     concat_list = tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode="w", encoding="utf-8")
     for _ in range(reps):
-        concat_list.write(f"file '{os.path.abspath(video)}'\n")
-        concat_list.write(f"file '{os.path.abspath(reversed_clip)}'\n")
+        concat_list.write(f"file {_concat_quote(video)}\n")
+        concat_list.write(f"file {_concat_quote(reversed_clip)}\n")
     concat_list.close()
 
     out = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
@@ -1321,11 +1333,20 @@ def run_batch(config_path: str, engine: str = "latentsync", pause_ms: int = 0,
               keep_intermediates: bool = False, voice_convert: bool = False,
               vc_target: str = None, vc_steps: int = 25, vc_denoise: float = 0.6,
               **engine_opts) -> None:
-    cfg = yaml.safe_load(Path(config_path).read_text())
+    cfg = yaml.safe_load(Path(config_path).read_text(encoding="utf-8")) or {}
     photo = cfg.get("photo")
     source_video = cfg.get("video", source_video)
-    voice_sample = cfg["voice_sample"]
-    lines = cfg["lines"]
+    voice_sample = cfg.get("voice_sample")
+    lines = cfg.get("lines")
+    if not (photo or source_video):
+        raise SystemExit(f"{config_path}: set 'photo' (or 'video').")
+    if not voice_sample:
+        raise SystemExit(f"{config_path}: set 'voice_sample'.")
+    if not isinstance(lines, list) or not lines:
+        raise SystemExit(f"{config_path}: 'lines' must be a non-empty list.")
+    for i, line in enumerate(lines, 1):
+        if not isinstance(line, dict) or not str(line.get("text", "")).strip():
+            raise SystemExit(f"{config_path}: line {i} needs a 'text' field.")
     # CLI flags OR with matching top-level config.yaml keys (applies to the
     # whole batch, same as engine/motion/pause_ms above).
     refine_lipsync_pass = refine_lipsync_pass or bool(cfg.get("refine_lipsync", False))
