@@ -1,0 +1,117 @@
+/* Talking Avatar. Colours come from the Gradio theme, so light and dark mode both work. */
+
+.gradio-container { max-width: 1360px !important; margin: 0 auto !important; }
+
+/* header */
+#app-header { padding: 0 !important; }
+.app-header { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  flex-wrap: wrap; padding: 6px 2px 4px; }
+.brand { display: flex; align-items: center; gap: 14px; }
+.brand svg { width: 46px; height: 46px; flex: none; border-radius: 12px;
+  box-shadow: 0 6px 18px -6px rgba(99, 70, 229, .55); }
+.brand h1 { margin: 0; font-size: 1.5rem; font-weight: 700; letter-spacing: -.01em; line-height: 1.2; }
+.brand p { margin: 2px 0 0; font-size: .92rem; color: var(--body-text-color-subdued); }
+.header-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip { display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px; border-radius: 999px;
+  font-size: .8rem; border: 1px solid var(--border-color-primary); background: var(--block-background-fill);
+  color: var(--body-text-color-subdued); max-width: 100%; }
+.chip .dot { width: 8px; height: 8px; border-radius: 50%; background: #94a3b8; }
+.chip.busy { color: var(--color-accent); border-color: var(--color-accent); }
+.chip.busy .dot { background: var(--color-accent); animation: ta-pulse 1.2s ease-in-out infinite; }
+@keyframes ta-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+
+/* cards and section headings */
+.card { gap: 12px !important; padding: 18px !important; border-radius: 16px !important;
+  background: var(--block-background-fill) !important; border: 1px solid var(--border-color-primary) !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 8px 24px -16px rgba(15, 23, 42, .18) !important; }
+.card .block:not(.hide-container) { background: var(--background-fill-secondary); }
+.card .block .block { background: transparent; }
+#side { position: sticky; top: 12px; align-self: flex-start; gap: 14px !important; }
+.section-head { display: flex; gap: 12px; align-items: flex-start; padding: 2px 2px 0; }
+.section-head .step { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid;
+  place-items: center; font-size: .85rem; font-weight: 700; color: #fff;
+  background: linear-gradient(135deg, #8b5cf6, #4f46e5); }
+.section-head h3 { margin: 0; font-size: 1.05rem; font-weight: 650; }
+.section-head p { margin: 2px 0 0; font-size: .86rem; color: var(--body-text-color-subdued); }
+.mini-head { font-weight: 650; font-size: .95rem; padding: 0 2px; }
+.note, .note p { font-size: .86rem !important; color: var(--body-text-color-subdued) !important; }
+
+#generate { min-height: 56px; font-size: 1.08rem; font-weight: 650; }
+.align-end { align-items: flex-end !important; }
+.align-end > button { margin-bottom: 8px; }
+
+/* status panel */
+.status { padding: 2px; }
+.status-title { font-size: 1.05rem; font-weight: 650; }
+.status-sub { margin-top: 3px; font-size: .88rem; color: var(--body-text-color-subdued); overflow-wrap: anywhere; }
+.stages { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 4px; padding: 0; }
+.stages li { padding: 3px 11px; border-radius: 999px; font-size: .78rem; border: 1px solid var(--border-color-primary);
+  color: var(--body-text-color-subdued); }
+.stages li.done { color: var(--color-accent); border-color: var(--color-accent); }
+.stages li.done::before { content: "\2713\00a0"; }
+.stages li.active { background: var(--color-accent); border-color: var(--color-accent); color: #fff; }
+.stages li.failed { background: #dc2626; border-color: #dc2626; color: #fff; }
+.bar { position: relative; height: 8px; margin: 12px 0 6px; border-radius: 999px; overflow: hidden;
+  background: var(--border-color-primary); }
+.bar > div { height: 100%; border-radius: inherit; background: linear-gradient(90deg, #8b5cf6, #4f46e5);
+  transition: width .6s ease; }
+.bar.indeterminate > div { width: 35%; animation: ta-slide 1.4s ease-in-out infinite; }
+@keyframes ta-slide { from { transform: translateX(-110%); } to { transform: translateX(300%); } }
+.status-meta { display: flex; justify-content: space-between; gap: 12px; font-size: .8rem;
+  color: var(--body-text-color-subdued); font-variant-numeric: tabular-nums; }
+.status-error { margin-top: 12px; padding: 10px 12px; border-radius: 10px; font-size: .88rem;
+  background: rgba(220, 38, 38, .1); border: 1px solid rgba(220, 38, 38, .35); }
+.status-hint, .status-foot { margin-top: 8px; font-size: .8rem; color: var(--body-text-color-subdued); }
+
+/* queue */
+.queue { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.queue li { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 8px;
+  background: var(--block-background-fill); font-size: .85rem; }
+.q-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: #94a3b8; }
+.q-running .q-dot { background: var(--color-accent); animation: ta-pulse 1.2s ease-in-out infinite; }
+.q-done .q-dot { background: #16a34a; }
+.q-failed .q-dot { background: #dc2626; }
+.q-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.q-state { flex: none; color: var(--body-text-color-subdued); font-size: .78rem; }
+.queue-empty { font-size: .85rem; color: var(--body-text-color-subdued); padding: 4px 2px; }
+
+.log textarea { font-family: var(--font-mono) !important; font-size: .76rem !important; line-height: 1.45 !important; }
+
+/* voice lab */
+.intro h3 { margin: 4px 0 2px; font-size: 1.1rem; }
+.intro p { margin: 0 0 8px; color: var(--body-text-color-subdued); font-size: .92rem; }
+.vl-status { font-size: .85rem; color: var(--body-text-color-subdued); }
+.vl-status.ok { color: #16a34a; }
+.vl-empty { padding: 28px 18px; text-align: center; border: 1px dashed var(--border-color-primary);
+  border-radius: 14px; color: var(--body-text-color-subdued); font-size: .9rem; }
+.vl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.vl-card { padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border-color-primary);
+  background: var(--block-background-fill); }
+.vl-label { font-weight: 600; font-size: .9rem; margin-bottom: 8px; }
+.vl-card audio { width: 100%; height: 36px; }
+.vl-skipped { margin: 10px 2px 0; font-size: .82rem; color: var(--body-text-color-subdued); }
+
+/* setup */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.tile { padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border-color-primary);
+  background: var(--block-background-fill); }
+.tile.warn { border-color: rgba(217, 119, 6, .6); }
+.tile-label { font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; color: var(--body-text-color-subdued); }
+.tile-value { margin-top: 3px; font-weight: 600; overflow-wrap: anywhere; }
+table.parts { width: 100%; border-collapse: collapse; font-size: .9rem; border: none !important; }
+table.parts th, table.parts td { border: none !important; background: transparent !important; }
+table.parts th { text-align: left; font-weight: 600; font-size: .78rem; text-transform: uppercase;
+  letter-spacing: .03em; color: var(--body-text-color-subdued); padding: 6px 8px; }
+table.parts td { padding: 9px 8px; border-top: 1px solid var(--border-color-primary) !important; vertical-align: top; }
+table.parts td:first-child { width: 26px; text-align: center; }
+table.parts .ok { color: #16a34a; font-weight: 700; }
+table.parts .missing { color: var(--body-text-color-subdued); font-weight: 700; }
+.setup .hint { font-size: .85rem; color: var(--body-text-color-subdued); }
+.privacy { margin-top: 8px; padding: 14px 18px; border-radius: 12px; border: 1px solid var(--border-color-primary); }
+.privacy h3 { margin: 0 0 6px; font-size: 1rem; }
+.privacy ul { margin: 0; padding-left: 18px; font-size: .88rem; }
+.privacy li { margin: 3px 0; }
+
+/* library table: the app's font rather than Gradio's monospace cells */
+#library table, #library td, #library th, #library span { font-family: var(--font) !important; }
+#library td span { font-size: .88rem; }
