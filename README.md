@@ -29,11 +29,16 @@ runs the InfiniteTalk engine on Google Colab instead (see section 3).
 ```bash
 git clone https://github.com/HarukiU06/talking-avatar.git
 cd talking-avatar
-./setup.sh               # main environment: voice cloning (+ SadTalker)
-./setup_latentsync.sh    # default lip-sync engine
-./setup_liveportrait.sh  # default head-motion engine
-./start.sh               # opens the app (on Windows you can double-click start.bat)
+./start.sh
 ```
+
+That's all. The first `./start.sh` installs everything the default engine
+needs (about 15-20 GB of downloads, 30-60 minutes) and then opens the app;
+after that, the same command opens the app straight away. On Windows, run
+these in **Git Bash** (it comes with Git for Windows), or clone and then
+double-click `start.bat`. Before the first run, check the
+[requirements](#1-requirements): Python 3.10 or 3.11, ffmpeg, an NVIDIA GPU,
+and on Windows the C++ Build Tools.
 
 Prefer the command line? Put a photo in `photos/me.jpg` and a 25-30s voice
 clip in `voice_samples/me.wav`, then:
@@ -125,9 +130,18 @@ optional engines, and tuning. Contents: [1. Requirements](#1-requirements) ·
 
 ## 3. Setup
 
+**You don't have to do any of this by hand.** `./start.sh` (or `start.bat`)
+runs `setup.sh`, `setup_latentsync.sh` and `setup_liveportrait.sh` for you
+on its first run, skips whatever is already installed, and opens the app.
+If one of them fails it says so; fix the problem and run `./start.sh` again
+and it carries on from there. The other engines below are optional: run
+their script whenever you want them, and the app's Setup tab picks them up.
+
+This section explains what each script does, for installing by hand or
+troubleshooting:
+
 ```bash
 cd talking-avatar
-chmod +x setup.sh
 ./setup.sh
 source .venv/bin/activate
 ```
@@ -349,9 +363,11 @@ from the original photo.
 
 ### The app
 
-Start it with **`start.bat`** (Windows: double-click it) or **`./start.sh`**
-(macOS, Linux, Git Bash). It opens in its own window if Chrome or Edge is
-installed, otherwise in your browser. The terminal window that starts with it
+Start it with **`./start.sh`** (macOS, Linux, Git Bash) or by double-clicking
+**`start.bat`** (Windows). The first time, that installs everything first
+(see section 3); `./start.sh --skip-setup` opens the app without checking the
+install. It opens in its own window if Chrome or Edge is installed, otherwise
+in your browser. The terminal window that starts with it
 is the app's engine: leave it open while you work, and to stop the app close
 it, press Ctrl+C in it, or use **Quit** on the Setup tab.
 
@@ -609,8 +625,15 @@ the transparency is entirely on you.
 - **The app doesn't open a window**: open the address it prints in the
   terminal (`http://127.0.0.1:7860/` unless that port was taken) in any
   browser, or start it with `--browser`. If it says Gradio isn't installed,
-  it's running with the wrong Python: start it with `start.bat` / `start.sh`,
-  which use `.venv`, after running `setup.sh`.
+  it's running with the wrong Python: start it with `./start.sh` /
+  `start.bat`, which install it and use `.venv`.
+- **`./start.sh` tries to install the same engine every time**: that
+  engine's setup script is failing (the messages above the app's address
+  say why; the entries below cover the usual causes). Fix it, or start with
+  `./start.sh --skip-setup` to use the app without that engine meanwhile.
+- **`start.bat` says it needs Git for Windows**: it runs the installer with
+  Git Bash. Install Git for Windows (you need it to clone the project
+  anyway), then double-click `start.bat` again.
 - **The app refuses to generate and lists what's missing**: that's the
   pre-flight check. The Setup tab shows which engines are installed and the
   setup script for each one that isn't.
@@ -739,7 +762,7 @@ the transparency is entirely on you.
 
 | Path | What it is |
 |---|---|
-| `start.bat`, `start.sh` | Start the desktop app (`app.py`) with the `.venv` from `setup.sh` |
+| `start.sh`, `start.bat` | The one command: installs what's missing on the first run, then opens the app |
 | `app.py`, `ui/` | The desktop app: screens, render queue, saved avatars, library |
 | `make_avatar.py` | The pipeline: text → voice → video, single line or `--config` batch; the app runs it for every video |
 | `config.example.yaml` | Template for batch mode; copy to `config.yaml` (gitignored) |

@@ -820,7 +820,7 @@ def build_app(manager: JobManager) -> gr.Blocks:
             manager.shutdown()
             threading.Timer(0.5, demo.close).start()
             return ('<div class="status-error">Talking Avatar has stopped. You can close this window; '
-                    'start it again with start.bat or ./start.sh.</div>')
+                    'start it again with ./start.sh (or start.bat on Windows).</div>')
 
         quit_btn.click(quit_app, quit_btn, quit_note, api_visibility="private",
                        js=_confirm_js("Quit Talking Avatar? A video that is still rendering will be stopped."))

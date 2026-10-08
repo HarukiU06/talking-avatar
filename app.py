@@ -5,9 +5,10 @@ app.py — Talking Avatar as a desktop app.
     python app.py              opens the app in its own window
     python app.py --browser    in a normal browser tab instead
 
-Or double-click start.bat (Windows) / run ./start.sh (macOS, Linux), which
-use the .venv that setup.sh creates. The app needs nothing beyond what
-setup.sh installs: Gradio already comes with Chatterbox.
+Normally you run ./start.sh (or double-click start.bat on Windows) instead:
+on the first run it installs everything, then it starts this file with the
+.venv that setup.sh creates. The app needs nothing beyond what setup.sh
+installs: Gradio already comes with Chatterbox.
 
 It is a front end for make_avatar.py: every video is a make_avatar.py run in
 the background, so anything the app makes can also be made from the command
@@ -53,8 +54,8 @@ def main() -> None:
     try:
         import gradio  # noqa: F401
     except ImportError:
-        sys.exit("Gradio isn't installed in this Python environment. Run ./setup.sh once, then start the "
-                 "app with start.bat (Windows) or ./start.sh (macOS, Linux).")
+        sys.exit("Gradio isn't installed in this Python environment. Start the app with ./start.sh "
+                 "(or start.bat on Windows): it installs everything on the first run.")
 
     from ui import storage, web
     from ui.jobs import JobManager
