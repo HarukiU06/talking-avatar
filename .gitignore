@@ -40,6 +40,11 @@ recordings/
 *.png
 *.heic
 
+# The app's own data: saved avatars, settings, and the upload cache
+avatars/
+app_settings.json
+.app_cache/
+
 # Local secrets and OS clutter
 .env
 .DS_Store

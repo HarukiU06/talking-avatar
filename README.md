@@ -15,8 +15,11 @@ Pass `--motion none` to skip step 2 and lip-sync a frozen photo instead (useful 
 
 For actual situational facial expression (not just lip sync — e.g. the face reading as "giving a confident business speech" rather than a static or generically animated one), pass `--engine infinitetalk` to use [InfiniteTalk](https://github.com/MeiGen-AI/InfiniteTalk) (MeiGen-AI, Apache 2.0) instead — a single audio+photo+text-prompt model that generates lip sync, head motion, and expression together, conditioned on a `--scene-prompt` describing the delivery you want. It's a 14B-parameter model (built on Wan2.1-I2V), so it's noticeably slower and needs significantly more disk space than the other two engines — see its setup section below.
 
-You "pre-enter" one or many lines of text (in a config file), walk away, and
-come back to finished `.mp4` files.
+You can use it as a **desktop app** (`start.bat` on Windows, `./start.sh`
+elsewhere): save your face and voice once as an avatar, type a script, press
+**Generate**, and watch the progress while videos render in the background.
+Or use the command line and "pre-enter" one or many lines of text in a config
+file, walk away, and come back to finished `.mp4` files.
 
 No suitable GPU? [`colab/talking_avatar_colab.ipynb`](colab/talking_avatar_colab.ipynb)
 runs the InfiniteTalk engine on Google Colab instead (see section 3).
@@ -29,9 +32,14 @@ cd talking-avatar
 ./setup.sh               # main environment: voice cloning (+ SadTalker)
 ./setup_latentsync.sh    # default lip-sync engine
 ./setup_liveportrait.sh  # default head-motion engine
-source .venv/bin/activate   # Windows (Git Bash): source .venv/Scripts/activate
+./start.sh               # opens the app (on Windows you can double-click start.bat)
+```
 
-# put your photo in photos/me.jpg and a 25-30s voice clip in voice_samples/me.wav
+Prefer the command line? Put a photo in `photos/me.jpg` and a 25-30s voice
+clip in `voice_samples/me.wav`, then:
+
+```bash
+source .venv/bin/activate   # Windows (Git Bash): source .venv/Scripts/activate
 python make_avatar.py --photo photos/me.jpg --voice voice_samples/me.wav \
   --text "Hello, this is a test of my avatar." --lang en --out output/test.mp4
 ```
@@ -219,10 +227,14 @@ Then compare the two without paying for the slow video step:
 python make_avatar.py --voice-compare   --voice voice_samples/me.wav --text "One sentence in your own words." --lang en
 ```
 
-That writes four `.wav` files to `output/voice_ab/<your-clip-name>/` —
-Chatterbox with your raw clip, Chatterbox with the cleaned clip, Chatterbox
-at a lower `--cfg-weight`, and XTTS — and exits. Listen, pick the one that
-sounds most like you, and use the matching flags for real generation.
+That writes one `.wav` per voice setting to
+`output/voice_ab/<your-clip-name>/` (or the folder given with `--out`) —
+Chatterbox with the cleaned and the raw clip, at a lower `--cfg-weight` and
+sentence by sentence, XTTS whole and sentence by sentence, and Chatterbox and
+XTTS each followed by Seed-VC: up to eight, skipping whatever isn't
+installed — and exits. Listen, pick the one that
+sounds most like you, and use the matching flags for real generation. The
+app's Voice Lab tab does the same with a player for each.
 
 Results are filed under the reference clip's name, so you can run this
 against two different recordings of yourself and compare those too — often
@@ -335,7 +347,44 @@ from the original photo.
 
 ## 4. Usage
 
-### Quick single test
+### The app
+
+Start it with **`start.bat`** (Windows: double-click it) or **`./start.sh`**
+(macOS, Linux, Git Bash). It opens in its own window if Chrome or Edge is
+installed, otherwise in your browser. The terminal window that starts with it
+is the app's engine: leave it open while you work, and to stop the app close
+it, press Ctrl+C in it, or use **Quit** on the Setup tab.
+
+- **Create**: choose or make an avatar (a photo or a video of you, plus a
+  25-30 s voice sample, either uploaded or recorded with your webcam and
+  microphone), type the script, pick the language and engine, and press
+  **Generate video**. Save the avatar once and it's there next time. Tick
+  *One video per paragraph* to make a separate video from each paragraph.
+- Videos render one at a time in the background, with live progress and the
+  full log under *Details*. You can keep adding more, and closing the window
+  doesn't stop anything: open the app again to see where it got to.
+- **Library**: every video you've made, with the text and settings it was
+  made with. *Use these settings* loads them back into Create.
+- **Voice Lab**: the same sentence in every voice setting, side by side, so
+  you can choose a voice before spending minutes on video (the app's version
+  of `--voice-compare`).
+- **Setup**: what's installed, which setup script adds what's missing, and
+  your GPU.
+
+The app runs `make_avatar.py` for every video, so the rest of this README
+applies to it too: *Advanced settings* holds the same options as the command
+line. `start.bat` and `start.sh` pass their arguments on to `app.py`:
+`--browser` opens a normal browser tab, `--port N` picks the port, and
+`--listen --auth USER:PASSWORD` makes the app reachable from other computers
+on your network, behind a login (without one, anyone who can reach your
+computer could use the app and see your videos).
+
+Saved avatars go in `avatars/`, videos in `output/`, and the app's settings
+in `app_settings.json`. Git ignores all three.
+
+### Command line
+
+#### Quick single test
 
 ```bash
 python make_avatar.py \
@@ -350,7 +399,7 @@ python make_avatar.py \
 `--photo photos/me.jpg` works in place of `--video` if you have no footage,
 but expect noticeably worse results — see section 2.
 
-### Batch mode (pre-enter multiple lines/languages at once)
+#### Batch mode (pre-enter multiple lines/languages at once)
 
 Edit `config.example.yaml`, save as `config.yaml`, then:
 
@@ -557,6 +606,15 @@ the transparency is entirely on you.
 
 ## 8. Troubleshooting
 
+- **The app doesn't open a window**: open the address it prints in the
+  terminal (`http://127.0.0.1:7860/` unless that port was taken) in any
+  browser, or start it with `--browser`. If it says Gradio isn't installed,
+  it's running with the wrong Python: start it with `start.bat` / `start.sh`,
+  which use `.venv`, after running `setup.sh`.
+- **The app refuses to generate and lists what's missing**: that's the
+  pre-flight check. The Setup tab shows which engines are installed and the
+  setup script for each one that isn't.
+
 - **`CUDA out of memory`**: close other GPU programs, or lower audio length
   per clip. For SadTalker specifically, `--preprocess crop` (already
   default) helps too.
@@ -681,7 +739,9 @@ the transparency is entirely on you.
 
 | Path | What it is |
 |---|---|
-| `make_avatar.py` | The entry point: text → voice → video, single line or `--config` batch |
+| `start.bat`, `start.sh` | Start the desktop app (`app.py`) with the `.venv` from `setup.sh` |
+| `app.py`, `ui/` | The desktop app: screens, render queue, saved avatars, library |
+| `make_avatar.py` | The pipeline: text → voice → video, single line or `--config` batch; the app runs it for every video |
 | `config.example.yaml` | Template for batch mode; copy to `config.yaml` (gitignored) |
 | `setup.sh`, `setup_*.sh` | One installer per engine, each with its own virtual environment |
 | `xtts_synth.py` | XTTS-v2 worker, run inside `.venv-xtts` by `make_avatar.py` |
@@ -690,8 +750,8 @@ the transparency is entirely on you.
 | `colab/` | Google Colab notebook for the InfiniteTalk engine |
 
 Your own inputs and results (`photos/`, `voice_samples/`, `output/`,
-`config.yaml`) and every downloaded model or virtual environment are
-gitignored, as are common audio/video/image files anywhere in the tree, so a
+`config.yaml`, and the app's `avatars/` and `app_settings.json`) and every
+downloaded model or virtual environment are gitignored, as are common audio/video/image files anywhere in the tree, so a
 photo or voice recording can't be committed by accident.
 
 ## License
