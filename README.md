@@ -21,6 +21,8 @@ elsewhere): save your face and voice once as an avatar, type a script, press
 Or use the command line and "pre-enter" one or many lines of text in a config
 file, walk away, and come back to finished `.mp4` files.
 
+![The Create screen while a video renders: avatar and voice on the left, progress on the right](docs/images/1-create-rendering.png)
+
 No suitable GPU? [`colab/talking_avatar_colab.ipynb`](colab/talking_avatar_colab.ipynb)
 runs the InfiniteTalk engine on Google Colab instead (see section 3).
 
@@ -371,21 +373,45 @@ in your browser. The terminal window that starts with it
 is the app's engine: leave it open while you work, and to stop the app close
 it, press Ctrl+C in it, or use **Quit** on the Setup tab.
 
-- **Create**: choose or make an avatar (a photo or a video of you, plus a
-  25-30 s voice sample, either uploaded or recorded with your webcam and
-  microphone), type the script, pick the language and engine, and press
-  **Generate video**. Save the avatar once and it's there next time. Tick
-  *One video per paragraph* to make a separate video from each paragraph.
-- Videos render one at a time in the background, with live progress and the
-  full log under *Details*. You can keep adding more, and closing the window
-  doesn't stop anything: open the app again to see where it got to.
-- **Library**: every video you've made, with the text and settings it was
-  made with. *Use these settings* loads them back into Create.
-- **Voice Lab**: the same sentence in every voice setting, side by side, so
-  you can choose a voice before spending minutes on video (the app's version
-  of `--voice-compare`).
-- **Setup**: what's installed, which setup script adds what's missing, and
-  your GPU.
+The screenshots below use a drawn demo avatar.
+
+#### Create
+
+Choose or make an avatar: a photo or a video of you, plus a 25-30 s voice
+sample, either uploaded or recorded with your webcam and microphone. Type the
+script, pick the language and engine, and press **Generate video**. Save the
+avatar once and it's there next time. Tick *One video per paragraph* to make a
+separate video from each paragraph.
+
+Videos render one at a time in the background. The panel on the right shows
+each step (speech, head motion, lip sync) with a progress bar, the full log is
+under *Details*, and finished videos play under *Latest video*. You can keep
+adding more, and closing the window doesn't stop anything: open the app again
+to see where it got to.
+
+![A finished video on the Create screen](docs/images/2-create-done.png)
+
+#### Library
+
+Every video you've made, with the text and settings it was made with. Click a
+row to play it; *Use these settings* loads them back into Create.
+
+![The Library: a list of videos and a preview](docs/images/3-library.png)
+
+#### Voice Lab
+
+The same sentence in every voice setting, side by side, so you can choose a
+voice before spending minutes on video (the app's version of
+`--voice-compare`). Pick your favourite and press *Use this voice*.
+
+![Voice Lab: one player per voice setting](docs/images/4-voice-lab.png)
+
+#### Setup
+
+What's installed, which setup script adds what's missing, your GPU and free
+disk space, and the Quit button.
+
+![Setup: installed engines and how to add the rest](docs/images/5-setup.png)
 
 The app runs `make_avatar.py` for every video, so the rest of this README
 applies to it too: *Advanced settings* holds the same options as the command
@@ -771,6 +797,7 @@ the transparency is entirely on you.
 | `infinitetalk_run.py` | InfiniteTalk launcher with runtime patches, run inside `.venv-infinitetalk` |
 | `tools/measure_motion.py` | Reports how much a rendered video's face actually moves |
 | `colab/` | Google Colab notebook for the InfiniteTalk engine |
+| `docs/images/` | Screenshots of the app used in this README |
 
 Your own inputs and results (`photos/`, `voice_samples/`, `output/`,
 `config.yaml`, and the app's `avatars/` and `app_settings.json`) and every
