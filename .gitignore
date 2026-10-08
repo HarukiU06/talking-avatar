@@ -39,6 +39,8 @@ recordings/
 *.jpeg
 *.png
 *.heic
+# ...except the README's screenshots of the app (a drawn demo avatar, no real person)
+!docs/images/*.png
 
 # The app's own data: saved avatars, settings, and the upload cache
 avatars/

@@ -99,7 +99,7 @@
 .tile-label { font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; color: var(--body-text-color-subdued); }
 .tile-value { margin-top: 3px; font-weight: 600; overflow-wrap: anywhere; }
 table.parts { width: 100%; border-collapse: collapse; font-size: .9rem; border: none !important; }
-table.parts th, table.parts td { border: none !important; background: transparent !important; }
+table.parts tr, table.parts th, table.parts td { border: none !important; background: transparent !important; }
 table.parts th { text-align: left; font-weight: 600; font-size: .78rem; text-transform: uppercase;
   letter-spacing: .03em; color: var(--body-text-color-subdued); padding: 6px 8px; }
 table.parts td { padding: 9px 8px; border-top: 1px solid var(--border-color-primary) !important; vertical-align: top; }

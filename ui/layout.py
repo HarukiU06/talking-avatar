@@ -452,7 +452,7 @@ def build_app(manager: JobManager) -> gr.Blocks:
                             refresh_lib_btn = gr.Button("Refresh", size="sm")
                             open_output_btn = gr.Button("Open output folder", size="sm")
                     with gr.Column(scale=5):
-                        lib_video = gr.Video(label="Select a video", interactive=False, buttons=["download"],
+                        lib_video = gr.Video(label="Preview", interactive=False, buttons=["download"],
                                              height=380, elem_id="lib-video")
                         lib_text = gr.Textbox(label="Text", interactive=False, lines=3, elem_id="lib-text")
                         lib_info = gr.Markdown(elem_classes="note")
