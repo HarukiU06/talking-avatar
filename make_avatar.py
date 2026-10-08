@@ -1378,7 +1378,12 @@ def run_batch(config_path: str, engine: str = "latentsync", pause_ms: int = 0,
     release_tts_model()
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
+    """Every command-line option, with its default and allowed values.
+
+    Separate from main() so the desktop app (app.py) reads defaults and
+    choices from here instead of keeping a second copy that could drift.
+    """
     parser = argparse.ArgumentParser(description="Generate talking-avatar videos from text.")
     parser.add_argument("--config", help="YAML file with a batch of pre-entered lines")
     parser.add_argument("--photo", help="Path to your face photo")
@@ -1393,7 +1398,8 @@ def main():
     parser.add_argument("--voice", help="Path to your voice sample (6-30s, clean, wav/mp3)")
     parser.add_argument("--text", help="Text to speak")
     parser.add_argument("--lang", default="en", help="Language code (see README section 5)")
-    parser.add_argument("--out", help="Output video path")
+    parser.add_argument("--out", help="Output video path (with --voice-compare: the folder for "
+                                      "the comparison clips, default output/voice_ab/<clip-name>/)")
 
     parser.add_argument("--engine", default="latentsync",
                         choices=["latentsync", "sadtalker", "infinitetalk"],
@@ -1534,14 +1540,19 @@ def main():
     parser.add_argument("--infinitetalk-mode", default="streaming", choices=["streaming", "clip"],
                         help="[infinitetalk] streaming (default): supports longer audio. clip: "
                              "single-chunk generation")
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
 
     if args.voice_compare:
         if not (args.voice and args.text):
             parser.error("--voice-compare needs --voice and --text.")
         try:
-            voice_compare(args.voice, args.text, args.lang, pause_ms=args.pause_ms,
-                          vc_target=args.vc_target)
+            voice_compare(args.voice, args.text, args.lang, out_dir=args.out,
+                          pause_ms=args.pause_ms, vc_target=args.vc_target)
         finally:
             cleanup_prepared_voices()
         return
