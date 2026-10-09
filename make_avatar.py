@@ -456,9 +456,9 @@ def synthesize_speech_sbv2(text: str, lang: str, model_dir: Path, out_wav: str, 
 
     Chatterbox and XTTS have no model of Japanese pitch accent, and both were
     rejected by ear for Japanese intonation. SBV2 predicts accent with
-    pyopenjtalk, and {雨|あ'め} markup overrides it per mora (given_phone /
-    given_tone). Speed and pitch are native here (length, pitch_scale), so
-    there's no rubberband pass.
+    pyopenjtalk, and {雨|あ'め} markup overrides it inside pyopenjtalk
+    (sbv2_synth.AccentedFrontend), so attached particles follow. Speed and
+    pitch are native here (length, pitch_scale), so there's no rubberband pass.
 
     Runs in .venv-sbv2 as a subprocess (CLAUDE.md's cross-venv rule).
     """
