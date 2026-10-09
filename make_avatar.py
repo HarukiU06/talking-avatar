@@ -140,19 +140,10 @@ def release_tts_model() -> None:
         torch.cuda.empty_cache()
 
 
-def split_sentences(text: str) -> list:
-    """Split text into sentences on ./!/? followed by whitespace.
-
-    Not abbreviation-aware ("Dr.", "U.S.") — adequate for typed scripts,
-    not worth a full sentence-boundary NLP library for this project.
-    """
-    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
-    return [s for s in sentences if s.strip()]
-
-
 def synthesize_speech(text: str, lang: str, voice_sample: str, out_wav: str, pause_ms: int = 0,
                        cfg_weight: float = 0.5, exaggeration: float = 0.5,
-                       prep_voice: bool = True) -> str:
+                       prep_voice: bool = True, speed: float = 1.0, pitch: float = 0.0,
+                       pronunciations: str = None) -> str:
     """Generate speech audio in the cloned voice, in the given language.
 
     pause_ms=0 (the default) sends the whole text in one generate() call and
@@ -177,26 +168,34 @@ def synthesize_speech(text: str, lang: str, voice_sample: str, out_wav: str, pau
     delivery" section. exaggeration controls delivery intensity/emotion
     (0.25-2.0); higher also speeds up pacing, so a low cfg_weight + high
     exaggeration combination needs both tuned together.
+
+    Script markup (script_markup.py) is honoured: one generate() call per
+    segment, so text without markup is still a single call. Emotion tags map
+    to CHATTERBOX_EMOTIONS; speed/pitch are a rubberband pass afterwards.
     """
     if lang not in CHATTERBOX_LANGS:
         raise ValueError(f"Unsupported language '{lang}'. Supported: {sorted(CHATTERBOX_LANGS)}")
+    # pause_ms=0 -> one call for the whole text, so the model carries
+    # intonation across sentence boundaries instead of restarting at each.
+    segments = script_segments(text, lang, pause_ms, pronunciations)
+    check_emotions(segments, set(CHATTERBOX_EMOTIONS), "Chatterbox")
 
     voice_sample = get_prepared_voice(voice_sample, enabled=prep_voice)
     model = get_tts_model()
-
-    # pause_ms=0 -> one call for the whole text, so the model carries
-    # intonation across sentence boundaries instead of restarting at each.
-    segments = split_sentences(text) if pause_ms > 0 else [text.strip()]
-    clips = [
-        model.generate(segment, language_id=lang, audio_prompt_path=voice_sample,
-                       cfg_weight=cfg_weight, exaggeration=exaggeration).squeeze().cpu().numpy()
-        for segment in segments
-    ]
+    clips = []
+    for segment in segments:
+        if not segment.text:  # a leading [pause]: silence only
+            clips.append(np.zeros(0, dtype=np.float32))
+            continue
+        ex, cfg = chatterbox_params(segment, exaggeration, cfg_weight)
+        clips.append(model.generate(segment.text, language_id=lang, audio_prompt_path=voice_sample,
+                                    cfg_weight=cfg, exaggeration=ex).squeeze().cpu().numpy())
 
     # torchaudio.save() in recent versions requires the separate torchcodec
     # package as its encoding backend; write with soundfile instead to avoid
     # that extra dependency.
-    sf.write(out_wav, concat_with_pauses(clips, model.sr, pause_ms), model.sr)
+    sf.write(out_wav, concat_with_pauses(clips, model.sr, [s.pause_after_ms for s in segments]), model.sr)
+    apply_speed_pitch(out_wav, speed, pitch)
     return out_wav
 
 
@@ -342,7 +341,8 @@ def needs_watermark(backend: str, speed: float, pitch: float, voice_convert: boo
 
 
 def synthesize_speech_xtts(text: str, lang: str, voice_sample: str, out_wav: str,
-                           pause_ms: int = 0, prep_voice: bool = True) -> str:
+                           pause_ms: int = 0, prep_voice: bool = True, speed: float = 1.0,
+                           pitch: float = 0.0, pronunciations: str = None) -> str:
     """Generate speech with XTTS-v2 instead of Chatterbox.
 
     Same contract as synthesize_speech(): same sentence splitting, same
@@ -358,6 +358,10 @@ def synthesize_speech_xtts(text: str, lang: str, voice_sample: str, out_wav: str
             f"XTTS doesn't support language '{lang}'. Supported: {sorted(XTTS_LANGS)}. "
             "Use --tts chatterbox for the others."
         )
+    segments = script_segments(text, lang, pause_ms, pronunciations)
+    if any(s.emotion or s.emphasis for s in segments):
+        raise ValueError("XTTS has no emotion or emphasis control, so [tags] and *emphasis* can't be "
+                         "honoured. Use --tts chatterbox, or take them out.")
 
     worker = Path(__file__).parent / "xtts_synth.py"
     python = get_venv_python(XTTS_VENV)
@@ -367,9 +371,9 @@ def synthesize_speech_xtts(text: str, lang: str, voice_sample: str, out_wav: str
     job_path = os.path.join(work_dir, "job.json")
     with open(job_path, "w", encoding="utf-8") as fh:
         json.dump({
-            # See synthesize_speech(): 0 means hand over the whole text and let
-            # the model place its own pauses. XTTS splits internally anyway.
-            "sentences": split_sentences(text) if pause_ms > 0 else [text.strip()],
+            # See synthesize_speech(): without markup or --pause-ms this is the
+            # whole text in one piece. XTTS splits internally anyway.
+            "sentences": [s.text for s in segments if s.text],
             "lang": lang,
             "speaker_wav": os.path.abspath(voice_sample),
             "out_dir": work_dir,
@@ -381,10 +385,14 @@ def synthesize_speech_xtts(text: str, lang: str, voice_sample: str, out_wav: str
         subprocess.run(cmd, check=True)
         with open(job_path + ".result", encoding="utf-8") as fh:
             result = json.load(fh)
-        clips = [sf.read(f, dtype="float32")[0] for f in result["files"]]
-        sf.write(out_wav, concat_with_pauses(clips, result["sr"], pause_ms), result["sr"])
+        files = iter(result["files"])
+        clips = [sf.read(next(files), dtype="float32")[0] if s.text else np.zeros(0, np.float32)
+                 for s in segments]
+        sf.write(out_wav, concat_with_pauses(clips, result["sr"], [s.pause_after_ms for s in segments]),
+                 result["sr"])
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
+    apply_speed_pitch(out_wav, speed, pitch)
     return out_wav
 
 
@@ -605,16 +613,57 @@ def convert_voice(source_wav: str, target_voice: str, out_wav: str,
     return out_wav
 
 
+def resolve_tts(tts: str, lang: str, voice_sample: str = None, sbv2_model: str = None) -> tuple:
+    """--tts -> (the backend that will actually run, its SBV2 model folder or None).
+
+    auto: Japanese goes to Style-Bert-VITS2 when there's a voice trained on
+    this recording (find_sbv2_model), everything else to Chatterbox. A forced
+    backend that can't serve the request raises instead of falling back.
+    """
+    if tts == "auto":
+        if lang in SBV2_LANGS and sbv2_installed():
+            model = find_sbv2_model(voice_sample, sbv2_model)
+            if model:
+                return "sbv2", model
+            if sbv2_model:
+                raise FileNotFoundError(f"--sbv2-model {sbv2_model}: no finished model at "
+                                        f"{Path(SBV2_MODELS) / sbv2_model}")
+        return "chatterbox", None
+    if tts == "sbv2":
+        if lang not in SBV2_LANGS:
+            raise ValueError(f"Style-Bert-VITS2 JP-Extra speaks Japanese only, not '{lang}'.")
+        if not sbv2_installed():
+            raise FileNotFoundError("Style-Bert-VITS2 isn't set up. Run ./setup_sbv2.sh first.")
+        model = find_sbv2_model(voice_sample, sbv2_model)
+        if model is None:
+            name = sbv2_model or (Path(voice_sample).stem if voice_sample else "NAME")
+            raise FileNotFoundError(
+                f"No trained Style-Bert-VITS2 voice for {voice_sample} "
+                f"(expected {Path(SBV2_MODELS) / name}/). Train one with: "
+                f"python train_sbv2.py --voice {voice_sample}")
+        return "sbv2", model
+    return tts, None
+
+
 def synthesize(tts: str, text: str, lang: str, voice_sample: str, out_wav: str,
-               pause_ms: int = 0, cfg_weight: float = 0.5,
-               exaggeration: float = 0.5, prep_voice: bool = True) -> str:
-    """Dispatch to the selected TTS backend (--tts)."""
-    if tts == "xtts":
-        return synthesize_speech_xtts(text, lang, voice_sample, out_wav,
-                                      pause_ms=pause_ms, prep_voice=prep_voice)
+               pause_ms: int = 0, cfg_weight: float = 0.5, exaggeration: float = 0.5,
+               prep_voice: bool = True, speed: float = 1.0, pitch: float = 0.0,
+               sbv2_model: str = None, pronunciations: str = None) -> str:
+    """Dispatch to the backend --tts resolves to (see resolve_tts)."""
+    backend, model_dir = resolve_tts(tts, lang, voice_sample, sbv2_model)
+    if tts == "auto" and lang in SBV2_LANGS and backend == "chatterbox":
+        print("Note: Japanese is using Chatterbox, whose pitch accent is often wrong. For correct "
+              f"intonation: ./setup_sbv2.sh, then python train_sbv2.py --voice {voice_sample}")
+    if backend == "sbv2":
+        return synthesize_speech_sbv2(text, lang, model_dir, out_wav, pause_ms=pause_ms, speed=speed,
+                                      pitch=pitch, pronunciations=pronunciations)
+    if backend == "xtts":
+        return synthesize_speech_xtts(text, lang, voice_sample, out_wav, pause_ms=pause_ms,
+                                      prep_voice=prep_voice, speed=speed, pitch=pitch,
+                                      pronunciations=pronunciations)
     return synthesize_speech(text, lang, voice_sample, out_wav, pause_ms=pause_ms,
-                             cfg_weight=cfg_weight, exaggeration=exaggeration,
-                             prep_voice=prep_voice)
+                             cfg_weight=cfg_weight, exaggeration=exaggeration, prep_voice=prep_voice,
+                             speed=speed, pitch=pitch, pronunciations=pronunciations)
 
 
 def _scratch_wav(final_path: str) -> str:
@@ -693,6 +742,10 @@ def voice_compare(voice_sample: str, text: str, lang: str,
         print(f"--- {filename}: {description}")
         try:
             run(target)
+            # Pure Chatterbox output is already marked; XTTS output and
+            # anything Seed-VC re-synthesized isn't (see apply_watermark).
+            if not filename.startswith("chatterbox_") or "seedvc" in filename:
+                apply_watermark(target)
             produced.append((filename, description))
         except Exception as exc:
             print(f"    skipped: {exc}")
@@ -1452,12 +1505,13 @@ def make_one(photo: str, voice_sample: str, text: str, lang: str, out_video: str
              source_video: str = None,
              engine: str = "latentsync", pause_ms: int = 0, motion: str = "idle",
              refine_lipsync_pass: bool = False, cfg_weight: float = 0.5,
-             exaggeration: float = 0.5, tts: str = "chatterbox",
+             exaggeration: float = 0.5, tts: str = "auto",
              prep_voice: bool = True, motion_video: str = None,
              motion_scale: float = 1.0, keep_intermediates: bool = False,
              keep_tts_warm: bool = False, voice_convert: bool = False,
              vc_target: str = None, vc_steps: int = 25, vc_denoise: float = 0.6,
-             **engine_opts) -> None:
+             speed: float = 1.0, pitch: float = 0.0, sbv2_model: str = None,
+             pronunciations: str = None, **engine_opts) -> None:
     kept = []  # intermediates to report instead of delete, when asked
 
     def discard(path: str, label: str) -> None:
@@ -1483,12 +1537,17 @@ def make_one(photo: str, voice_sample: str, text: str, lang: str, out_video: str
             "ignoring."
         )
 
+    # Resolve the voice model up front: a forced backend that can't run should
+    # fail now, not after minutes of work, and the watermark decision needs it.
+    backend, _ = resolve_tts(tts, lang, voice_sample, sbv2_model)
+
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp_wav = tmp.name
     try:
         synthesize(tts, text, lang, voice_sample, tmp_wav, pause_ms=pause_ms,
                    cfg_weight=cfg_weight, exaggeration=exaggeration,
-                   prep_voice=prep_voice)
+                   prep_voice=prep_voice, speed=speed, pitch=pitch, sbv2_model=sbv2_model,
+                   pronunciations=pronunciations)
         if not keep_tts_warm:
             # Speech is done; everything below is the video stage, which wants
             # every byte of VRAM it can get. run_batch keeps it warm instead,
@@ -1505,6 +1564,11 @@ def make_one(photo: str, voice_sample: str, text: str, lang: str, out_video: str
                           diffusion_steps=vc_steps, denoise_ref=vc_denoise)
             discard(tmp_wav, "TTS speech before voice conversion")
             tmp_wav = converted
+
+        if needs_watermark(backend, speed, pitch, voice_convert):
+            # Last audio step on purpose: Seed-VC and rubberband both erase a
+            # mark applied earlier (see apply_watermark).
+            apply_watermark(tmp_wav)
 
         if engine == "sadtalker":
             if refine_lipsync_pass:
@@ -1574,11 +1638,12 @@ def run_batch(config_path: str, engine: str = "latentsync", pause_ms: int = 0,
               source_video: str = None,
               motion: str = "idle", refine_lipsync_pass: bool = False,
               cfg_weight: float = 0.5, exaggeration: float = 0.5,
-              tts: str = "chatterbox", prep_voice: bool = True,
+              tts: str = "auto", prep_voice: bool = True,
               motion_video: str = None, motion_scale: float = 1.0,
               keep_intermediates: bool = False, voice_convert: bool = False,
               vc_target: str = None, vc_steps: int = 25, vc_denoise: float = 0.6,
-              **engine_opts) -> None:
+              speed: float = 1.0, pitch: float = 0.0, sbv2_model: str = None,
+              pronunciations: str = None, **engine_opts) -> None:
     cfg = yaml.safe_load(Path(config_path).read_text(encoding="utf-8")) or {}
     photo = cfg.get("photo")
     source_video = cfg.get("video", source_video)
@@ -1603,6 +1668,10 @@ def run_batch(config_path: str, engine: str = "latentsync", pause_ms: int = 0,
     vc_target = cfg.get("vc_target", vc_target)
     motion_video = cfg.get("motion_video", motion_video)
     motion_scale = cfg.get("motion_scale", motion_scale)
+    speed = cfg.get("speed", speed)
+    pitch = cfg.get("pitch", pitch)
+    sbv2_model = cfg.get("sbv2_model", sbv2_model)
+    pronunciations = cfg.get("pronunciations", pronunciations)
     if engine == "infinitetalk" and "scene_prompt" in cfg:
         engine_opts["scene_prompt"] = cfg["scene_prompt"]
 
@@ -1619,7 +1688,8 @@ def run_batch(config_path: str, engine: str = "latentsync", pause_ms: int = 0,
                  motion_scale=motion_scale, keep_intermediates=keep_intermediates,
                  keep_tts_warm=True, voice_convert=voice_convert,
                  vc_target=vc_target, vc_steps=vc_steps, vc_denoise=vc_denoise,
-                 **engine_opts)
+                 speed=speed, pitch=pitch, sbv2_model=sbv2_model,
+                 pronunciations=pronunciations, **engine_opts)
 
     release_tts_model()
 
@@ -1642,7 +1712,9 @@ def build_parser() -> argparse.ArgumentParser:
                              "--engine latentsync (skips LivePortrait) and --engine "
                              "infinitetalk (video-to-video)")
     parser.add_argument("--voice", help="Path to your voice sample (6-30s, clean, wav/mp3)")
-    parser.add_argument("--text", help="Text to speak")
+    parser.add_argument("--text", help="Text to speak. Supports markup: [pause 800], "
+                                       "[happy]...[/happy], *emphasis*, {word|reading} "
+                                       "(README: Script markup)")
     parser.add_argument("--lang", default="en", help="Language code (see README section 5)")
     parser.add_argument("--out", help="Output video path (with --voice-compare: the folder for "
                                       "the comparison clips, default output/voice_ab/<clip-name>/)")
@@ -1656,10 +1728,32 @@ def build_parser() -> argparse.ArgumentParser:
                              "generates lip sync, head motion AND facial expression together from "
                              "audio + a text scene prompt (--scene-prompt) - most realistic, but a "
                              "14B-parameter model, much slower and requires setup_infinitetalk.sh")
-    parser.add_argument("--tts", default="chatterbox", choices=["chatterbox", "xtts"],
-                        help="Text-to-speech engine. chatterbox (default): 23 languages. "
-                             "xtts: XTTS-v2, 17 languages, often clones timbre more "
-                             "closely - needs ./setup_xtts.sh")
+    def float_in(lo: float, hi: float):
+        def parse(value: str) -> float:
+            number = float(value)
+            if not lo <= number <= hi:
+                raise argparse.ArgumentTypeError(f"must be between {lo:g} and {hi:g}")
+            return number
+        parse.__name__ = "number"  # argparse's error message names the type
+        return parse
+
+    parser.add_argument("--tts", default="auto", choices=["auto", "chatterbox", "xtts", "sbv2"],
+                        help="Text-to-speech engine. auto (default): Japanese uses your trained "
+                             "Style-Bert-VITS2 voice when there is one (correct pitch accent), "
+                             "everything else Chatterbox. chatterbox: 23 languages. xtts: XTTS-v2, "
+                             "17 languages, often clones timbre more closely - needs "
+                             "./setup_xtts.sh. sbv2: Style-Bert-VITS2, Japanese only - needs "
+                             "./setup_sbv2.sh and train_sbv2.py")
+    parser.add_argument("--speed", type=float_in(0.5, 2.0), default=1.0,
+                        help="Speaking rate, 0.5-2.0 (default 1.0)")
+    parser.add_argument("--pitch", type=float_in(-12, 12), default=0.0,
+                        help="Pitch shift in semitones, -12 to 12 (default 0)")
+    parser.add_argument("--sbv2-model",
+                        help="[sbv2] Which trained voice in models/sbv2/ to use (default: the one "
+                             "trained on the --voice recording)")
+    parser.add_argument("--pronunciations",
+                        help="YAML of per-language word -> reading fixes (default: "
+                             "pronunciations.yaml if it exists; see pronunciations.example.yaml)")
     parser.add_argument("--voice-convert", action="store_true",
                         help="Add a Seed-VC pass after the TTS that converts the generated "
                              "speech to your voice. Two stages beat zero-shot cloning alone: "
@@ -1839,6 +1933,8 @@ def main():
         motion_scale=args.motion_scale, keep_intermediates=args.keep_intermediates,
         voice_convert=args.voice_convert, vc_target=args.vc_target,
         vc_steps=args.vc_steps, vc_denoise=args.vc_denoise,
+        speed=args.speed, pitch=args.pitch, sbv2_model=args.sbv2_model,
+        pronunciations=args.pronunciations,
     )
 
     try:
