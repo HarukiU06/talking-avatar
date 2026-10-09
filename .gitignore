@@ -9,6 +9,7 @@ LivePortrait/
 Wav2Lip/
 InfiniteTalk/
 seed-vc/
+Style-Bert-VITS2/
 
 # Downloaded model weights (fetched by setup.sh's GFPGAN install step)
 gfpgan/
@@ -18,6 +19,8 @@ photos/
 voice_samples/
 output/
 config.yaml
+models/
+pronunciations.yaml
 
 __pycache__/
 *.pyc
