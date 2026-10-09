@@ -25,8 +25,10 @@ MAX_PAUSE_MS = 10_000
 MAX_INTENSITY = 3.0
 
 _PAUSE = re.compile(r"pause\s+(\d+(?:\.\d+)?)\s*(ms|s)?", re.IGNORECASE)
-_OPEN = re.compile(r"([a-z0-9_]+)(?:\s+(\d+(?:\.\d+)?))?")
-_CLOSE = re.compile(r"/([a-z0-9_]+)")
+# Emotion names start with a letter, so a footnote-style "[1]" is reported as
+# an unknown tag rather than taken for an emotion.
+_OPEN = re.compile(r"([a-z][a-z0-9_]*)(?:\s+(\d+(?:\.\d+)?))?")
+_CLOSE = re.compile(r"/([a-z][a-z0-9_]*)")
 _ESCAPABLE = set("[]*{}|\\")
 # The sentence rule --pause-ms has always used: ./!/? followed by whitespace.
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
@@ -194,8 +196,8 @@ def parse(text: str, lang: str, pronunciations: dict | None = None) -> list:
                 emotion = None
             elif m := _OPEN.fullmatch(body):
                 if emotion:
-                    raise MarkupError(f"[{m.group(1)}] is inside [{emotion[0]}]: emotion spans can't nest",
-                                      text, i)
+                    raise MarkupError(f"[{m.group(1)}] is inside [{emotion[0]}]: emotion spans can't nest "
+                                      "(write \[ for a literal bracket)", text, i)
                 intensity = float(m.group(2)) if m.group(2) else 1.0
                 if intensity > MAX_INTENSITY:
                     raise MarkupError(f"intensity must be between 0 and {MAX_INTENSITY:g}", text, i)
@@ -206,6 +208,16 @@ def parse(text: str, lang: str, pronunciations: dict | None = None) -> list:
             i = end + 1
             continue
         if ch == "*":
+            # Like Markdown: *word* only when the asterisks touch the words, so
+            # "5 * 3" or "4* and 5*" stop with an error instead of quietly
+            # emphasising (and splitting) part of the sentence.
+            if emphasis_at is None:
+                if i + 1 >= len(text) or text[i + 1].isspace() or text[i + 1] == "*":
+                    raise MarkupError("'*' starts emphasis only right before a word, as in *word* "
+                                      "(write \* for a literal asterisk)", text, i)
+            elif text[i - 1].isspace():
+                raise MarkupError("'*' ends emphasis only right after a word, as in *word* "
+                                  "(write \* for a literal asterisk)", text, i)
             flush_segment()
             emphasis_at = None if emphasis_at is not None else i
             i += 1
@@ -228,7 +240,8 @@ def parse(text: str, lang: str, pronunciations: dict | None = None) -> list:
         i += 1
 
     if emotion:
-        raise MarkupError(f"[{emotion[0]}] is never closed", text, emotion[2])
+        raise MarkupError(f"[{emotion[0]}] is never closed (write \[ for a literal bracket)",
+                          text, emotion[2])
     if emphasis_at is not None:
         raise MarkupError("'*' is never closed (write \\* for a literal asterisk)", text, emphasis_at)
     flush_segment()

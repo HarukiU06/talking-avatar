@@ -113,7 +113,12 @@ class Errors(unittest.TestCase):
             ("[pause soon]", "en", "unknown tag"),
             ("A[pause 11s]", "en", "10000"),
             ("[happy 4]a[/happy]", "en", "between 0 and 3"),
-            ("5 * 3 = 15", "en", "never closed"),
+            ("5 * 3 = 15", "en", "literal asterisk"),
+            ("5 * 3 * 2 = 30", "en", "literal asterisk"),
+            ("Rated 4* and 5* hotels", "en", "literal asterisk"),
+            ("**bold** text", "en", "literal asterisk"),
+            ("*word *", "en", "literal asterisk"),
+            ("[1] and [2]", "en", "unknown tag"),
             ("a [pause 3", "en", "no closing"),
             ("{雨}", "ja", "word|reading"),
             ("{雨|}", "ja", "word|reading"),
@@ -126,6 +131,13 @@ class Errors(unittest.TestCase):
                 with self.assertRaises(MarkupError) as err:
                     parse(text, lang)
                 self.assertIn(message, str(err.exception))
+
+    def test_bracket_errors_say_how_to_write_a_literal_bracket(self):
+        for text in ("a [applause] b", "[1] and [2]"):
+            with self.subTest(text=text):
+                with self.assertRaises(MarkupError) as err:
+                    parse(text, "en")
+                self.assertIn("\[", str(err.exception))
 
     def test_error_reports_offset(self):
         with self.assertRaises(MarkupError) as err:
