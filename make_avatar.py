@@ -388,6 +388,85 @@ def synthesize_speech_xtts(text: str, lang: str, voice_sample: str, out_wav: str
     return out_wav
 
 
+# [tag] on SBV2: style_weight at intensity 1 (SBV2's own default is 1.0, which
+# barely moves a voice trained on one calm recording). *word*: a wider pitch
+# range for that span.
+SBV2_STYLE_WEIGHT = 2.0
+SBV2_EMPHASIS_INTONATION = 1.3
+
+
+def load_sbv2_styles(model_dir: Path) -> dict:
+    """styles.yaml: emotion tag -> this voice's style name (named by the user after listening)."""
+    styles = yaml.safe_load((model_dir / "styles.yaml").read_text(encoding="utf-8")) or {}
+    if not isinstance(styles, dict):
+        raise ValueError(f"{model_dir / 'styles.yaml'}: expected lines like  happy: style_1")
+    styles = {str(tag): str(style) for tag, style in styles.items()}
+    styles.setdefault("neutral", "Neutral")
+    config = json.loads((model_dir / "config.json").read_text(encoding="utf-8"))
+    known = set(config.get("data", {}).get("style2id", {}))
+    unknown = sorted(set(styles.values()) - known)
+    if unknown:
+        raise ValueError(f"{model_dir / 'styles.yaml'} names styles this voice doesn't have: "
+                         f"{', '.join(unknown)}. Available: {', '.join(sorted(known))}")
+    return styles
+
+
+def sbv2_segment_job(segment, styles: dict) -> dict:
+    return {
+        "pieces": [[p.text, p.accent] for p in segment.pieces],
+        "style": styles[segment.emotion or "neutral"],
+        "style_weight": SBV2_STYLE_WEIGHT * segment.intensity if segment.emotion else 1.0,
+        "intonation_scale": SBV2_EMPHASIS_INTONATION if segment.emphasis else 1.0,
+    }
+
+
+def synthesize_speech_sbv2(text: str, lang: str, model_dir: Path, out_wav: str, pause_ms: int = 0,
+                           speed: float = 1.0, pitch: float = 0.0, pronunciations: str = None) -> str:
+    """Japanese with explicit pitch accent: Style-Bert-VITS2 JP-Extra trained on your voice.
+
+    Chatterbox and XTTS have no model of Japanese pitch accent, and both were
+    rejected by ear for Japanese intonation. SBV2 predicts accent with
+    pyopenjtalk, and {雨|あ'め} markup overrides it per mora (given_phone /
+    given_tone). Speed and pitch are native here (length, pitch_scale), so
+    there's no rubberband pass.
+
+    Runs in .venv-sbv2 as a subprocess (CLAUDE.md's cross-venv rule).
+    """
+    if lang not in SBV2_LANGS:
+        raise ValueError(f"Style-Bert-VITS2 JP-Extra speaks Japanese only, not '{lang}'. "
+                         "Use --tts chatterbox (or auto) for other languages.")
+    segments = script_segments(text, lang, pause_ms, pronunciations)
+    styles = load_sbv2_styles(model_dir)
+    check_emotions(segments, set(styles), "this Style-Bert-VITS2 voice (see its styles.yaml)")
+
+    work_dir = tempfile.mkdtemp(prefix="sbv2_")
+    job_path = os.path.join(work_dir, "job.json")
+    with open(job_path, "w", encoding="utf-8") as fh:
+        json.dump({
+            "model_dir": str(model_dir),
+            "out_dir": work_dir,
+            "length": 1.0 / speed,
+            "pitch_scale": 2 ** (pitch / 12),
+            "segments": [sbv2_segment_job(s, styles) for s in segments if s.text],
+        }, fh, ensure_ascii=False)
+
+    cmd = [get_venv_python(SBV2_VENV), str(Path(__file__).parent / "sbv2_synth.py"), job_path]
+    print("Running Style-Bert-VITS2:", " ".join(cmd))
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+    try:
+        subprocess.run(cmd, cwd=SBV2_DIR, check=True, env=env)
+        with open(job_path + ".result", encoding="utf-8") as fh:
+            result = json.load(fh)
+        files = iter(result["files"])
+        clips = [sf.read(next(files), dtype="float32")[0] if s.text else np.zeros(0, np.float32)
+                 for s in segments]
+        sf.write(out_wav, concat_with_pauses(clips, result["sr"], [s.pause_after_ms for s in segments]),
+                 result["sr"])
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+    return out_wav
+
+
 def denoise(audio: "np.ndarray", sr: int, strength: float = 0.6) -> "np.ndarray":
     """Strip stationary background noise (room tone, hiss, hum) from speech.
 
