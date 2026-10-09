@@ -42,19 +42,38 @@ def run_sbv2(args: list) -> None:
     subprocess.run(cmd, cwd=ma.SBV2_DIR, check=True, env=env)
 
 
-def record_source(model_dir: Path, voice: str) -> None:
-    """Remember which recording this model is of; refuse to mix two recordings under one name."""
-    model_dir.mkdir(parents=True, exist_ok=True)
-    source_path = model_dir / "source.json"
+def model_name(voice: str, name: str = None) -> str:
+    """--name, or the recording's file name. The app saves every avatar's voice
+    as avatars/<avatar>/voice.<ext>, so that stem names nobody in particular."""
+    if name is None:
+        name = Path(voice).stem
+        if name.lower() == "voice":
+            raise SystemExit(f"{voice}: give this voice a name with --name (a file called 'voice' "
+                             "could be anyone's, e.g. any avatar saved by the app).")
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+        raise SystemExit(f"--name {name!r}: use letters, digits, - and _ only (it becomes a folder name).")
+    return name
+
+
+def record_source(model_dir: Path, data_dir: Path, voice: str) -> None:
+    """Remember which recording a model is of; refuse to mix two recordings under one name.
+
+    Checked in both folders: the data folder holds the transcript, features
+    and resume checkpoints, so reusing it for another recording would quietly
+    train the old voice and label it with the new recording's hash.
+    """
     digest = ma.file_sha256(voice)
-    if source_path.exists():
-        recorded = json.loads(source_path.read_text(encoding="utf-8")).get("sha256")
-        if recorded != digest:
-            raise SystemExit(f"{model_dir} was trained from a different recording. "
-                             "Pick another --name (or delete that folder to start over).")
-        return
-    source_path.write_text(json.dumps({"sha256": digest, "voice": os.path.abspath(voice)}, indent=2),
-                           encoding="utf-8")
+    source = json.dumps({"sha256": digest, "voice": os.path.abspath(voice)}, indent=2)
+    for folder in (model_dir, data_dir):
+        source_path = folder / "source.json"
+        if source_path.exists():
+            if json.loads(source_path.read_text(encoding="utf-8")).get("sha256") != digest:
+                raise SystemExit(f"This name was already used for a different recording ({folder}). "
+                                 f"Pick another --name, or delete both {model_dir} and {data_dir} to "
+                                 "start over.")
+    for folder in (model_dir, data_dir):
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "source.json").write_text(source, encoding="utf-8")
 
 
 def listed_clips(data_dir: Path) -> list:
@@ -138,14 +157,12 @@ def main() -> None:
         raise SystemExit("Style-Bert-VITS2 isn't set up. Run ./setup_sbv2.sh first.")
     if not os.path.isfile(args.voice):
         raise SystemExit(f"No such file: {args.voice}")
-    name = args.name or Path(args.voice).stem
-    if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
-        raise SystemExit(f"--name {name!r}: use letters, digits, - and _ only (it becomes a folder name).")
+    name = model_name(args.voice, args.name)
 
     model_dir = Path(ma.SBV2_MODELS) / name
     data_dir = Path(ma.SBV2_DATA) / name
     staged = data_dir / "input" / f"{name}.wav"
-    record_source(model_dir, args.voice)
+    record_source(model_dir, data_dir, args.voice)
 
     steps = {
         "stage": (lambda: staged.exists(),

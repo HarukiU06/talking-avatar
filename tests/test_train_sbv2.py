@@ -1,4 +1,5 @@
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,19 +21,38 @@ class TrainSbv2(unittest.TestCase):
 
     def test_records_source_on_first_run(self):
         voice = self.voice("me.wav", b"take one")
-        train_sbv2.record_source(self.tmp / "model", voice)
+        train_sbv2.record_source(self.tmp / "model", self.tmp / "data", voice)
         source = json.loads((self.tmp / "model" / "source.json").read_text(encoding="utf-8"))
         self.assertEqual(source["sha256"], ma.file_sha256(voice))
 
     def test_rerun_with_same_recording_is_fine(self):
         voice = self.voice("me.wav", b"take one")
-        train_sbv2.record_source(self.tmp / "model", voice)
-        train_sbv2.record_source(self.tmp / "model", voice)
+        train_sbv2.record_source(self.tmp / "model", self.tmp / "data", voice)
+        train_sbv2.record_source(self.tmp / "model", self.tmp / "data", voice)
 
     def test_refuses_a_name_trained_from_another_recording(self):
-        train_sbv2.record_source(self.tmp / "model", self.voice("a.wav", b"take one"))
+        train_sbv2.record_source(self.tmp / "model", self.tmp / "data", self.voice("a.wav", b"take one"))
         with self.assertRaisesRegex(SystemExit, "--name"):
-            train_sbv2.record_source(self.tmp / "model", self.voice("b.wav", b"a completely different take"))
+            train_sbv2.record_source(self.tmp / "model", self.tmp / "data",
+                                     self.voice("b.wav", b"a completely different take"))
+
+    def test_deleting_only_the_model_folder_still_refuses(self):
+        # The training data, transcript and resume checkpoints live in the data
+        # folder: reusing it would train recording A's voice under B's hash.
+        train_sbv2.record_source(self.tmp / "model", self.tmp / "data", self.voice("a.wav", b"take one"))
+        shutil.rmtree(self.tmp / "model")
+        with self.assertRaises(SystemExit) as err:
+            train_sbv2.record_source(self.tmp / "model", self.tmp / "data",
+                                     self.voice("b.wav", b"a completely different take"))
+        self.assertIn(str(self.tmp / "model"), str(err.exception))
+        self.assertIn(str(self.tmp / "data"), str(err.exception))
+
+    def test_the_apps_generic_voice_name_needs_an_explicit_name(self):
+        # The app saves every avatar's voice as avatars/<name>/voice.<ext>.
+        with self.assertRaisesRegex(SystemExit, "--name"):
+            train_sbv2.model_name("avatars/me/voice.wav", None)
+        self.assertEqual(train_sbv2.model_name("avatars/me/voice.wav", "me"), "me")
+        self.assertEqual(train_sbv2.model_name("voice_samples/newtest.wav", None), "newtest")
 
     def test_drop_non_japanese(self):
         esd = self.tmp / "esd.list"
