@@ -93,6 +93,19 @@ class Pronunciation(unittest.TestCase):
         self.assertEqual([p.text for p in seg.pieces], ["あまみや", "さんと", "あめ"])
         self.assertEqual(seg.pieces[2].accent, 1)
 
+    def test_dictionary_leaves_kanji_compounds_alone(self):
+        # 梅雨 (つゆ), 雨天 (うてん), 雨戸 (あまど) are other words, not 雨 (あめ) + a kanji.
+        pron = {"雨": "あ'め"}
+        for text in ("梅雨です", "雨天です", "雨戸です"):
+            with self.subTest(text=text):
+                self.assertEqual(texts(parse(text, "ja", pron)), [text])
+        seg, = parse("雨が降る", "ja", pron)
+        self.assertEqual(seg.pieces[0], Piece("あめ", 1))
+
+    def test_dictionary_key_ending_in_kana_may_touch_kanji(self):
+        seg, = parse("あめ玉", "ja", {"あめ": "あめ0"})
+        self.assertEqual(seg.pieces[0], Piece("あめ", 0))
+
     def test_inline_beats_dictionary(self):
         seg, = parse("{雨|あめ0}", "ja", {"雨": "あ'め"})
         self.assertEqual(seg.pieces, [Piece("あめ", 0)])

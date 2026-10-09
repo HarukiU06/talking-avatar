@@ -36,6 +36,7 @@ _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 # morae of their own.
 _SMALL_KANA = set("ゃゅょぁぃぅぇぉゎャュョァィゥェォヮ")
 _KANA = re.compile(r"[ぁ-ゖァ-ヺー]+")
+_IDEOGRAPHS = "々㐀-䶿一-鿿豈-﫿"  # kanji/hanzi and 々
 
 
 class MarkupError(ValueError):
@@ -110,10 +111,19 @@ def load_pronunciations(path: str | None) -> dict:
 def _dictionary_pieces(text: str, lang: str, pron: dict) -> list:
     if not pron:
         return [Piece(text)]
-    alternatives = "|".join(re.escape(k) for k in sorted(pron, key=len, reverse=True))
-    # Japanese/Chinese have no spaces to mark word edges; elsewhere "Ueno" must
-    # not rewrite the start of "Uenomachi".
-    pattern = alternatives if lang in ("ja", "zh") else rf"(?<!\w)(?:{alternatives})(?!\w)"
+    keys = sorted(pron, key=len, reverse=True)
+    if lang in ("ja", "zh"):
+        # No spaces mark word edges here. A key may still not run into another
+        # kanji: 雨 must leave 梅雨 (つゆ), 雨天 (うてん) and 雨戸 (あまど)
+        # alone. Kana edges can touch anything (雨が, あめ玉).
+        def guarded(key):
+            before = f"(?<![{_IDEOGRAPHS}])" if re.match(f"[{_IDEOGRAPHS}]", key[0]) else ""
+            after = f"(?![{_IDEOGRAPHS}])" if re.match(f"[{_IDEOGRAPHS}]", key[-1]) else ""
+            return before + re.escape(key) + after
+        pattern = "|".join(guarded(k) for k in keys)
+    else:
+        # "Ueno" must not rewrite the start of "Uenomachi".
+        pattern = rf"(?<!\w)(?:{'|'.join(re.escape(k) for k in keys)})(?!\w)"
     pieces, pos = [], 0
     for match in re.finditer(pattern, text):
         if match.start() > pos:
