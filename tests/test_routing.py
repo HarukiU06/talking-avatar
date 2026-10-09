@@ -100,6 +100,27 @@ class Backends(unittest.TestCase):
                 ma.synthesize_speech("[joyful]Hi[/joyful]", "en", "voice.wav", "out.wav")
 
 
+class CheckScript(unittest.TestCase):
+    """check_script is every refusal a backend makes before loading a model, for the app and batches."""
+
+    def test_each_backend_refuses_what_it_cannot_say(self):
+        with tempfile.TemporaryDirectory() as d:
+            model = Path(d)
+            (model / "styles.yaml").write_text("neutral: Neutral\n", encoding="utf-8")
+            (model / "config.json").write_text('{"data": {"style2id": {"Neutral": 0}}}', encoding="utf-8")
+            cases = [("xtts", "en", "*Hi*", "XTTS has no emotion"),
+                     ("chatterbox", "en", "[joyful]Hi[/joyful]", "isn't an emotion Chatterbox knows"),
+                     ("sbv2", "ja", "[happy]雨[/happy]", "isn't an emotion this Style-Bert-VITS2 voice"),
+                     ("sbv2", "en", "Hi", "Japanese only"),
+                     ("xtts", "sw", "Hi", "XTTS doesn't support"),
+                     ("chatterbox", "en", "[pause 500]", "nothing to say")]
+            for backend, lang, text, error in cases:
+                with self.subTest(backend=backend, text=text):
+                    with self.assertRaisesRegex(ValueError, error):
+                        ma.check_script(text, lang, backend, model)
+            self.assertEqual(len(ma.check_script("[happy]Hi[/happy] there", "en", "chatterbox")), 2)
+
+
 class Parser(unittest.TestCase):
     def test_defaults_and_ranges(self):
         parser = ma.build_parser()
@@ -142,12 +163,34 @@ class Pipeline(unittest.TestCase):
         seen = {}
         with tempfile.TemporaryDirectory() as d, \
                 mock.patch.object(ma, "make_one", lambda *a, **k: seen.update(k)):
+            pron = Path(d) / "p.yaml"
+            pron.write_text("en: {}\n", encoding="utf-8")
             cfg = Path(d) / "c.yaml"
             cfg.write_text("photo: p.jpg\nvoice_sample: v.wav\nspeed: 1.1\npitch: -1\n"
-                           "sbv2_model: me\npronunciations: p.yaml\nlines:\n  - text: hi\n", encoding="utf-8")
+                           f"sbv2_model: me\npronunciations: {pron.as_posix()}\nlines:\n  - text: hi\n",
+                           encoding="utf-8")
             ma.run_batch(str(cfg))
         self.assertEqual((seen["speed"], seen["pitch"], seen["sbv2_model"], seen["pronunciations"]),
-                         (1.1, -1, "me", "p.yaml"))
+                         (1.1, -1, "me", pron.as_posix()))
+
+    def test_batch_checks_every_line_before_rendering_any(self):
+        rendered = []
+        bad_configs = {
+            "line 2": 'lines:\n  - text: Hello.\n  - text: "[happy]Hi."\n',
+            "line 3": "lines:\n  - text: Hello.\n  - text: Hi.\n  - text: Hola.\n    lang: xx\n",
+            "speed": "speed: 0\nlines:\n  - text: Hello.\n",
+            "pitch": "pitch: 13\nlines:\n  - text: Hello.\n",
+        }
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(ma, "make_one", lambda *a, **k: rendered.append(a)):
+            for expected, body in bad_configs.items():
+                with self.subTest(expected):
+                    cfg = Path(d) / "c.yaml"
+                    cfg.write_text("photo: p.jpg\nvoice_sample: v.wav\ntts: chatterbox\n" + body,
+                                   encoding="utf-8")
+                    with self.assertRaisesRegex(SystemExit, expected):
+                        ma.run_batch(str(cfg))
+        self.assertEqual(rendered, [])
 
 
 if __name__ == "__main__":

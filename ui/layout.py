@@ -623,10 +623,10 @@ def build_app(manager: JobManager) -> gr.Blocks:
                      *values):
             options = options_from(kind, photo_file, video_file, voice_file, vc_file, motion_file, script, values)
             shared["parts"] = system.check_parts()
-            found = pipeline.problems(options, shared["parts"])
+            found = pipeline.problems(options, shared["parts"], split)
             if found:
                 refuse(*(f"• {p}" for p in found))
-            texts = pipeline.paragraphs(script) if split else [pipeline.clean_text(script)]
+            texts = pipeline.job_texts(script, split)
             if any(len(t) > pipeline.MAX_TEXT_CHARS for t in texts):
                 refuse(f"That's a lot of text for one video. Keep each video under "
                        f"{pipeline.MAX_TEXT_CHARS} characters (a few minutes of speech): split it into "

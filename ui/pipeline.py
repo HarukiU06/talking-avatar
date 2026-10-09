@@ -11,8 +11,9 @@ import re
 import time
 from pathlib import Path
 
+import yaml
+
 import make_avatar as ma
-import script_markup
 from ui import storage
 from ui.jobs import Job, Stage
 
@@ -105,6 +106,14 @@ def paragraphs(text: str) -> list:
     return [p for p in (clean_text(chunk) for chunk in re.split(r"\n\s*\n", text or "")) if p]
 
 
+def job_texts(text: str, split: bool) -> list:
+    """The text each queued video will get: one per paragraph, or the whole script as one."""
+    if split:
+        return paragraphs(text)
+    whole = clean_text(text)
+    return [whole] if whole else []
+
+
 def to_args(options: dict) -> list:
     """{dest: value} -> make_avatar.py arguments, leaving out anything at its default.
 
@@ -176,8 +185,41 @@ def needed_parts(options: dict) -> list:
     return needed
 
 
-def problems(options: dict, parts: dict) -> list:
-    """Reasons this can't run, worded for the person at the screen. Empty = good to go."""
+def script_problems(options: dict, split: bool = False) -> list:
+    """What would stop a job at its speech step, checked on exactly the text each job gets.
+
+    The backend is the one the job will resolve to, so tags are checked
+    against its emotions (a trained voice's styles.yaml, say) and XTTS
+    refuses markup here instead of minutes into a queue.
+    """
+    texts = job_texts(options.get("text"), split)
+    lang = options.get("lang") or "en"
+    try:
+        backend, model_dir = ma.resolve_tts(options.get("tts") or default("tts"), lang, options.get("voice"),
+                                            options.get("sbv2_model"), options.get("vc_target"))
+    except (ValueError, FileNotFoundError):
+        return []  # problems() already says why this voice model can't run
+    errors = {}  # message -> paragraph numbers, so ten paragraphs with one mistake read as one line
+    for number, text in enumerate(texts, 1):
+        try:
+            ma.check_script(text, lang, backend, model_dir, int(options.get("pause_ms") or 0),
+                            options.get("pronunciations"))
+        except (ValueError, OSError, yaml.YAMLError) as exc:
+            errors.setdefault(str(exc), []).append(number)
+    found = []
+    for message, numbers in errors.items():
+        where = ""
+        if len(texts) > 1:
+            where = f" (paragraph{'s' if len(numbers) > 1 else ''} {', '.join(map(str, numbers))})"
+        found.append(f"Script markup{where}: {message}")
+    return found
+
+
+def problems(options: dict, parts: dict, split: bool = False) -> list:
+    """Reasons this can't run, worded for the person at the screen. Empty = good to go.
+
+    split: "One video per paragraph" is ticked, so each paragraph is its own job.
+    """
     found = []
     if not clean_text(options.get("text")):
         found.append("Type what your avatar should say.")
@@ -199,11 +241,8 @@ def problems(options: dict, parts: dict) -> list:
                                    options.get("vc_target")) is None:
         found.append("This voice has no trained Style-Bert-VITS2 model yet. Train one with "
                      "train_sbv2.py (README: Style-Bert-VITS2), or pick Auto.")
-    if clean_text(options.get("text")):
-        try:
-            script_markup.parse(options["text"], options.get("lang") or "en")
-        except script_markup.MarkupError as exc:
-            found.append(f"Script markup: {exc}")
+    elif clean_text(options.get("text")):
+        found += script_problems(options, split)
     for key in needed_parts(options):
         part = parts.get(key)
         if part and not part.ready:

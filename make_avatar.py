@@ -173,12 +173,9 @@ def synthesize_speech(text: str, lang: str, voice_sample: str, out_wav: str, pau
     segment, so text without markup is still a single call. Emotion tags map
     to CHATTERBOX_EMOTIONS; speed/pitch are a rubberband pass afterwards.
     """
-    if lang not in CHATTERBOX_LANGS:
-        raise ValueError(f"Unsupported language '{lang}'. Supported: {sorted(CHATTERBOX_LANGS)}")
     # pause_ms=0 -> one call for the whole text, so the model carries
     # intonation across sentence boundaries instead of restarting at each.
-    segments = script_segments(text, lang, pause_ms, pronunciations)
-    check_emotions(segments, set(CHATTERBOX_EMOTIONS), "Chatterbox")
+    segments = check_script(text, lang, "chatterbox", pause_ms=pause_ms, pronunciations=pronunciations)
 
     voice_sample = get_prepared_voice(voice_sample, enabled=prep_voice)
     model = get_tts_model()
@@ -296,6 +293,39 @@ def script_segments(text: str, lang: str, pause_ms: int = 0, pronunciations: str
     return segments
 
 
+def check_script(text: str, lang: str, backend: str, model_dir: Path = None, pause_ms: int = 0,
+                 pronunciations: str = None) -> list:
+    """Every refusal a backend makes before loading a model; returns the segments.
+
+    The synthesize_* functions start with this, and the app and run_batch call
+    it up front on each text a job will get, so a problem in paragraph or
+    line 7 stops the run before anything renders. backend is resolve_tts's.
+    """
+    if backend == "sbv2":
+        if lang not in SBV2_LANGS:
+            raise ValueError(f"Style-Bert-VITS2 JP-Extra speaks Japanese only, not '{lang}'. "
+                             "Use --tts chatterbox (or auto) for other languages.")
+        segments = script_segments(text, lang, pause_ms, pronunciations)
+        check_emotions(segments, set(load_sbv2_styles(model_dir)),
+                       "this Style-Bert-VITS2 voice (see its styles.yaml)")
+    elif backend == "xtts":
+        if lang not in XTTS_LANGS:
+            raise ValueError(
+                f"XTTS doesn't support language '{lang}'. Supported: {sorted(XTTS_LANGS)}. "
+                "Use --tts chatterbox for the others."
+            )
+        segments = script_segments(text, lang, pause_ms, pronunciations)
+        if any(s.emotion or s.emphasis for s in segments):
+            raise ValueError("XTTS has no emotion or emphasis control, so [tags] and *emphasis* can't be "
+                             "honoured. Use --tts chatterbox, or take them out.")
+    else:
+        if lang not in CHATTERBOX_LANGS:
+            raise ValueError(f"Unsupported language '{lang}'. Supported: {sorted(CHATTERBOX_LANGS)}")
+        segments = script_segments(text, lang, pause_ms, pronunciations)
+        check_emotions(segments, set(CHATTERBOX_EMOTIONS), "Chatterbox")
+    return segments
+
+
 def apply_speed_pitch(wav: str, speed: float = 1.0, pitch: float = 0.0) -> None:
     """Change tempo and pitch (semitones) in place with ffmpeg's rubberband filter.
 
@@ -353,15 +383,7 @@ def synthesize_speech_xtts(text: str, lang: str, voice_sample: str, out_wav: str
     Runs in .venv-xtts as a subprocess, like every other model here: coqui-tts
     and chatterbox-tts pin conflicting packages and cannot share a process.
     """
-    if lang not in XTTS_LANGS:
-        raise ValueError(
-            f"XTTS doesn't support language '{lang}'. Supported: {sorted(XTTS_LANGS)}. "
-            "Use --tts chatterbox for the others."
-        )
-    segments = script_segments(text, lang, pause_ms, pronunciations)
-    if any(s.emotion or s.emphasis for s in segments):
-        raise ValueError("XTTS has no emotion or emphasis control, so [tags] and *emphasis* can't be "
-                         "honoured. Use --tts chatterbox, or take them out.")
+    segments = check_script(text, lang, "xtts", pause_ms=pause_ms, pronunciations=pronunciations)
 
     worker = Path(__file__).parent / "xtts_synth.py"
     python = get_venv_python(XTTS_VENV)
@@ -440,12 +462,8 @@ def synthesize_speech_sbv2(text: str, lang: str, model_dir: Path, out_wav: str, 
 
     Runs in .venv-sbv2 as a subprocess (CLAUDE.md's cross-venv rule).
     """
-    if lang not in SBV2_LANGS:
-        raise ValueError(f"Style-Bert-VITS2 JP-Extra speaks Japanese only, not '{lang}'. "
-                         "Use --tts chatterbox (or auto) for other languages.")
-    segments = script_segments(text, lang, pause_ms, pronunciations)
+    segments = check_script(text, lang, "sbv2", model_dir, pause_ms, pronunciations)
     styles = load_sbv2_styles(model_dir)
-    check_emotions(segments, set(styles), "this Style-Bert-VITS2 voice (see its styles.yaml)")
 
     work_dir = tempfile.mkdtemp(prefix="sbv2_")
     job_path = os.path.join(work_dir, "job.json")
@@ -1690,6 +1708,26 @@ def run_batch(config_path: str, engine: str = "latentsync", pause_ms: int = 0,
     pronunciations = cfg.get("pronunciations", pronunciations)
     if engine == "infinitetalk" and "scene_prompt" in cfg:
         engine_opts["scene_prompt"] = cfg["scene_prompt"]
+
+    # Everything that would stop a line, checked before the first one renders:
+    # line 7 failing after six videos is an hour lost. Ranges come from the
+    # command line's own checks (--speed 0 used to divide by zero here).
+    types = {a.dest: a.type for a in build_parser()._actions}
+    try:
+        speed = types["speed"](str(speed))
+    except (argparse.ArgumentTypeError, ValueError) as exc:
+        raise SystemExit(f"{config_path}: 'speed' {exc}")
+    try:
+        pitch = types["pitch"](str(pitch))
+    except (argparse.ArgumentTypeError, ValueError) as exc:
+        raise SystemExit(f"{config_path}: 'pitch' {exc}")
+    for i, line in enumerate(lines, 1):
+        lang = line.get("lang", "en")
+        try:
+            backend, model_dir = resolve_tts(tts, lang, voice_sample, sbv2_model, vc_target)
+            check_script(str(line["text"]), lang, backend, model_dir, pause_ms, pronunciations)
+        except (ValueError, OSError, yaml.YAMLError) as exc:
+            raise SystemExit(f"{config_path}: line {i}: {exc}")
 
     for i, line in enumerate(lines, 1):
         text = line["text"]

@@ -15,6 +15,28 @@ class UiPipeline(unittest.TestCase):
         found = pipeline.problems({"text": "5 * 3 = 15", "lang": "en", "tts": "auto"}, {})
         self.assertTrue(any(p.startswith("Script markup:") for p in found), found)
 
+    def script_problems(self, text, split=False, **options):
+        options = {"text": text, "lang": "en", "tts": "chatterbox", **options}
+        return [p for p in pipeline.problems(options, {}, split) if p.startswith("Script")]
+
+    def test_problems_checks_each_paragraph_as_the_job_that_will_run_it(self):
+        text = "[happy]Hi.\n\nBye.[/happy]"
+        self.assertEqual(self.script_problems(text), [])
+        found = self.script_problems(text, split=True)
+        self.assertEqual(len(found), 2, found)
+        self.assertIn("paragraph 1", found[0])
+        self.assertIn("paragraph 2", found[1])
+        self.assertEqual(pipeline.job_texts(text, True), ["[happy]Hi.", "Bye.[/happy]"])
+        self.assertEqual(pipeline.job_texts(text, False), ["[happy]Hi. Bye.[/happy]"])
+
+    def test_problems_checks_what_the_resolved_voice_model_can_do(self):
+        for options, text, error in ((dict(tts="xtts"), "*Hi* there", "XTTS has no emotion"),
+                                     (dict(), "[joyful]Hi[/joyful]", "isn't an emotion Chatterbox"),
+                                     (dict(), "[pause 500]", "nothing to say")):
+            with self.subTest(text=text):
+                found = self.script_problems(text, **options)
+                self.assertTrue(any(error in p for p in found), found)
+
     def test_describe_and_parts_follow_the_resolved_backend(self):
         options = {"tts": "auto", "lang": "ja", "engine": "latentsync", "voice": "v.wav"}
         with mock.patch.object(ma, "resolve_tts", lambda *a, **k: ("sbv2", Path("m"))):
