@@ -295,6 +295,46 @@ nightly-PyTorch workarounds that are still a moving target. Seed-VC works
 zero-shot with no training, and ships a `train.py` if you later want to
 fine-tune on a longer recording.
 
+### Style-Bert-VITS2 (optional, Japanese with correct pitch accent)
+
+Chatterbox and XTTS-v2 are multilingual models with no model of Japanese
+pitch accent (高低アクセント), so Japanese comes out with the wrong
+rise and fall even when every reading is right. Style-Bert-VITS2 JP-Extra
+predicts accent explicitly, and lets you correct it word by word (see
+"Script markup" in section 6).
+
+It can't clone from a 30-second clip: it is trained once on a recording of
+you speaking Japanese. About 10 minutes of natural speech is plenty.
+
+```bash
+./setup_sbv2.sh
+python train_sbv2.py --voice voice_samples/me.wav
+```
+
+`setup_sbv2.sh` clones Style-Bert-VITS2, creates `.venv-sbv2` (PyTorch with
+CUDA 12.8), and downloads its Japanese BERT, the pretrained base model and a
+few stock voices. `train_sbv2.py` slices the recording, transcribes it with
+Whisper, trains, and finds the emotional styles in your recording
+(about 20 minutes for a 10-minute recording on an RTX 5070 Ti Laptop GPU, peaking near 9 GB of VRAM). Every step resumes where it left off if interrupted.
+
+Whisper's transcription mistakes become training labels, so it's worth
+stopping to check them:
+
+```bash
+python train_sbv2.py --voice voice_samples/me.wav --stop-after transcribe
+# fix models/sbv2-data/me/esd.list, then run the same command without --stop-after
+```
+
+When it finishes, listen to `models/sbv2/me/style_samples/*.wav` and give the
+styles names in `models/sbv2/me/styles.yaml` (`style_1: style_1` →
+`happy: style_1`); those names are the emotion tags you can use. The styles
+come from your own recording, so a calm reading gives calm styles.
+
+After that, `--lang ja` uses this voice automatically (`--tts auto`, the
+default) whenever `--voice` is the recording it was trained on, in the app
+too: it's matched by the file's content, not its name. `--tts sbv2` forces
+it; `--tts chatterbox` goes back to Chatterbox.
+
 ### InfiniteTalk (optional, `--engine infinitetalk`)
 
 Only needed if you want situational facial expression (not just lip sync) —
@@ -470,6 +510,34 @@ Chatterbox-only.
 
 ## 6. Tuning quality
 
+**Script markup (all engines)** — the controls a hosted voice tool gives you,
+written into the text:
+
+| Markup | Effect |
+|---|---|
+| `[pause 800]`, `[pause 800ms]`, `[pause 1.5s]` | Exactly that much silence here (up to 10 s) |
+| `[happy]…[/happy]`, `[happy 1.5]…[/happy]` | Say this part with that emotion; the number (0–3) is the intensity |
+| `*word*` | Emphasis |
+| `{word\|reading}` | Say `reading` instead, e.g. `{Ueno\|oo-EH-no}` |
+| `{雨\|あ'め}`, `{飴\|あめ0}` | Japanese pitch accent: `'` after the mora where the pitch drops, a trailing `0` for a flat word |
+| `\[`, `\*`, `\{` | A literal `[`, `*` or `{` |
+
+`--speed` (0.5–2.0) and `--pitch` (semitones, −12 to 12) apply to the whole
+line. Words you always want read a certain way go in `pronunciations.yaml`
+(copy `pronunciations.example.yaml`); inline `{…|…}` wins over it.
+
+| | Chatterbox | Style-Bert-VITS2 (ja) | XTTS-v2 |
+|---|---|---|---|
+| Pauses, pronunciation | yes | yes | yes |
+| Emotion tags | `neutral calm happy excited sad angry serious` | the names in the voice's `styles.yaml` | no (an error says so) |
+| Emphasis | approximated | approximated | no |
+| Accent marks | — | yes | — |
+| Speed / pitch | post-processed (rubberband) | native | post-processed |
+
+The text is only split where you put markup: plain text still goes to the
+voice model in one piece (see "Speech pacing" below for why that matters), so
+each tag costs a small seam in the delivery. Use them where they earn it.
+
 **Speech pacing (all engines)**
 - `--pause-ms` (default 0): at 0, the whole text goes to the TTS in one call
   and the model places its own pauses — it carries intonation across sentence
@@ -642,12 +710,22 @@ This creates a synthetic video of a real face speaking words it never said.
 Only use it with your own likeness/voice or with someone's explicit consent.
 Chatterbox embeds an inaudible watermark in generated audio for exactly this
 reason — don't try to strip it, and be transparent with anyone you share the
-videos with about how they were made. **XTTS-v2 (`--tts xtts`) does not
-watermark its output**, so if you switch to it that safeguard is gone and
-the transparency is entirely on you.
+videos with about how they were made. Speech that doesn't come straight
+out of Chatterbox (XTTS-v2, Style-Bert-VITS2, anything sped up, pitch-shifted
+or passed through Seed-VC) gets the same watermark added as the last audio
+step, because those either never had it or erase it.
 
 ## 8. Troubleshooting
 
+- **Japanese intonation sounds wrong, or the log says "Japanese is using
+  Chatterbox"**: Chatterbox doesn't model Japanese pitch accent. Set up and
+  train Style-Bert-VITS2 (section 3); a single wrong word can be fixed with
+  `{word|reading}` and an accent mark (section 6, "Script markup").
+- **"[x] isn't an emotion ... knows"**: the error lists the tags that voice
+  model has. For a Style-Bert-VITS2 voice they are the names in its
+  `styles.yaml`.
+- **"... (character N: ...)"**: a markup mistake at that position, often a
+  `*` or `[` meant literally. Write `\*` or `\[` instead.
 - **The app doesn't open a window**: open the address it prints in the
   terminal (`http://127.0.0.1:7860/` unless that port was taken) in any
   browser, or start it with `--browser`. If it says Gradio isn't installed,
@@ -794,13 +872,19 @@ the transparency is entirely on you.
 | `config.example.yaml` | Template for batch mode; copy to `config.yaml` (gitignored) |
 | `setup.sh`, `setup_*.sh` | One installer per engine, each with its own virtual environment |
 | `xtts_synth.py` | XTTS-v2 worker, run inside `.venv-xtts` by `make_avatar.py` |
+| `script_markup.py` | Parses script markup (pauses, emotion, emphasis, pronunciation) |
+| `train_sbv2.py`, `sbv2_styles.py` | Train a Style-Bert-VITS2 voice on your recording; name its styles |
+| `sbv2_run.py` | Runs Style-Bert-VITS2's own scripts with fixes for torch 2.8 on Windows |
+| `sbv2_synth.py` | Style-Bert-VITS2 worker, run inside `.venv-sbv2` by `make_avatar.py` |
+| `pronunciations.example.yaml` | Template for per-word reading fixes; copy to `pronunciations.yaml` (gitignored) |
+| `tests/` | Unit tests: `.venv/Scripts/python.exe -m unittest discover -s tests` |
 | `infinitetalk_run.py` | InfiniteTalk launcher with runtime patches, run inside `.venv-infinitetalk` |
 | `tools/measure_motion.py` | Reports how much a rendered video's face actually moves |
 | `colab/` | Google Colab notebook for the InfiniteTalk engine |
 | `docs/images/` | Screenshots of the app used in this README |
 
 Your own inputs and results (`photos/`, `voice_samples/`, `output/`,
-`config.yaml`, and the app's `avatars/` and `app_settings.json`) and every
+`config.yaml`, `pronunciations.yaml`, trained voices in `models/`, and the app's `avatars/` and `app_settings.json`) and every
 downloaded model or virtual environment are gitignored, as are common audio/video/image files anywhere in the tree, so a
 photo or voice recording can't be committed by accident.
 
@@ -811,8 +895,10 @@ This project's own code is released under the [MIT License](LICENSE).
 The models it downloads and runs are **not** part of this repository and keep
 their own licenses: Chatterbox (MIT), LivePortrait (MIT), LatentSync
 (Apache 2.0), SadTalker (Apache 2.0), InfiniteTalk (Apache 2.0), Wav2Lip
-(research / non-commercial; see its repository), Seed-VC (GPL-3.0), and
-XTTS-v2 (Coqui Public Model License, non-commercial). LatentSync and
+(research / non-commercial; see its repository), Seed-VC (GPL-3.0),
+XTTS-v2 (Coqui Public Model License, non-commercial), and Style-Bert-VITS2
+(AGPL-3.0; its Japanese BERT, deberta-v2-large-japanese-char-wwm, is
+CC-BY-SA-4.0, and the stock voices it downloads have their own terms). LatentSync and
 LivePortrait also rely on InsightFace, whose pretrained face models are for
 non-commercial research only. Check the license of each engine you use before
 using its output commercially.

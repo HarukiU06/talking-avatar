@@ -302,8 +302,8 @@ def apply_speed_pitch(wav: str, speed: float = 1.0, pitch: float = 0.0) -> None:
     For backends without native speed/pitch (Chatterbox, XTTS). rubberband with
     formants preserved keeps a pitch change from sounding like a different (or
     chipmunk) voice; atempo and librosa's phase vocoder sound metallic on
-    speech. It erases the Chatterbox watermark (measured 1.0 -> 0.0), which is
-    why apply_watermark() runs after every such change.
+    speech. It can erase the Chatterbox watermark (a tempo + pitch change
+    measured 1.0 -> 0.0), which is why apply_watermark() runs after it.
     """
     if speed == 1.0 and pitch == 0.0:
         return

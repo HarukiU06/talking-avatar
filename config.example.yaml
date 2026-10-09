@@ -17,10 +17,20 @@ voice_sample: voice_samples/me.wav
 # exaggeration: 0.5
 
 # Optional, same as --tts: which voice-cloning model to use for the whole
-# batch. "chatterbox" (default, 23 languages) or "xtts" (17 languages, often
-# closer timbre — needs ./setup_xtts.sh). Use `--voice-compare` to pick one
-# before committing a whole batch to it.
+# batch. "auto" (default: Japanese lines use your trained Style-Bert-VITS2
+# voice when there is one, everything else Chatterbox), "chatterbox" (23
+# languages), "xtts" (17 languages, often closer timbre — needs
+# ./setup_xtts.sh) or "sbv2" (Japanese only). Use `--voice-compare` to pick
+# one before committing a whole batch to it.
 # tts: xtts
+
+# Optional, same as --speed/--pitch/--sbv2-model/--pronunciations.
+# Lines may also use script markup: [pause 800], [happy]...[/happy],
+# *emphasis*, {word|reading} (README section 6, "Script markup").
+# speed: 1.0          # 0.5-2.0
+# pitch: 0            # semitones, -12 to 12
+# sbv2_model: me      # which trained voice in models/sbv2/ (default: the one trained on voice_sample)
+# pronunciations: pronunciations.yaml
 
 # Optional, same as --motion-video/--motion-scale: only used with the default
 # latentsync engine. motion_video is your own 15-20s clip of your head idling
