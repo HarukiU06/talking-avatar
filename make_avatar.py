@@ -34,6 +34,8 @@ import numpy as np
 import yaml
 import soundfile as sf
 
+import script_markup
+
 # Where SadTalker was cloned by setup.sh. Override with the SADTALKER_DIR
 # env var if you put it somewhere else.
 SADTALKER_DIR = os.environ.get("SADTALKER_DIR", str(Path(__file__).parent / "SadTalker"))
@@ -224,23 +226,119 @@ def cleanup_prepared_voices() -> None:
     _prepared_voice_cache.clear()
 
 
-def concat_with_pauses(clips: list, sr: int, pause_ms: int) -> np.ndarray:
-    """Join per-sentence audio clips with a fixed silence gap between them.
+def concat_with_pauses(clips: list, sr: int, pause_ms) -> np.ndarray:
+    """Join audio clips with silence between them.
 
     Shared by every TTS backend: none of them has an explicit "pause here"
-    control, so a whole paragraph sent in one call comes back as one
-    breathless run-on. Splitting on sentence boundaries and splicing gives
-    direct control over pacing instead of hoping the model infers it.
+    control, so pauses are spliced in. pause_ms is either one gap for between
+    every pair (--pause-ms sentence splicing) or a list with the silence to put
+    after each clip (markup [pause]s, which may also lead or trail: an empty
+    first clip with a pause after it is leading silence).
     """
     if not clips:
         return np.zeros(0, dtype=np.float32)
-    silence = np.zeros(int(sr * pause_ms / 1000), dtype=np.float32)
+    gaps = list(pause_ms) if isinstance(pause_ms, (list, tuple)) else [pause_ms] * (len(clips) - 1) + [0]
+    if len(gaps) != len(clips):
+        raise ValueError(f"{len(clips)} clips but {len(gaps)} pauses")
     spliced = []
-    for i, clip in enumerate(clips):
-        spliced.append(clip)
-        if i < len(clips) - 1:
-            spliced.append(silence)
+    for clip, gap in zip(clips, gaps):
+        spliced.append(np.asarray(clip, dtype=np.float32))
+        if gap:
+            spliced.append(np.zeros(int(sr * gap / 1000), dtype=np.float32))
     return np.concatenate(spliced)
+
+
+# Emotion tags on Chatterbox: tag -> (exaggeration, cfg_weight), starting
+# points picked by ear. A tag sets exaggeration (scaled by intensity from the
+# run's own value), but only *nudges* cfg_weight relative to Chatterbox's 0.5
+# default, so a low --cfg-weight chosen to stop accent carry-over stays low.
+CHATTERBOX_EMOTIONS = {
+    "neutral": (0.5, 0.5),
+    "calm": (0.35, 0.5),
+    "happy": (0.8, 0.4),
+    "excited": (1.1, 0.3),
+    "sad": (0.4, 0.5),
+    "angry": (1.2, 0.3),
+    "serious": (0.45, 0.6),
+}
+# Neither Chatterbox nor SBV2 has an emphasis input; *word* is approximated
+# with a livelier delivery of just that span.
+CHATTERBOX_EMPHASIS = 0.3
+
+
+def chatterbox_params(segment, exaggeration: float, cfg_weight: float) -> tuple:
+    """(exaggeration, cfg_weight) for one segment of a Chatterbox run."""
+    ex, cfg = exaggeration, cfg_weight
+    if segment.emotion:
+        tag_ex, tag_cfg = CHATTERBOX_EMOTIONS[segment.emotion]
+        ex += (tag_ex - exaggeration) * segment.intensity
+        cfg += (tag_cfg - 0.5) * segment.intensity
+    if segment.emphasis:
+        ex += CHATTERBOX_EMPHASIS
+    return min(max(ex, 0.25), 2.0), min(max(cfg, 0.0), 1.0)
+
+
+def check_emotions(segments: list, valid: set, backend: str) -> None:
+    """Fail before any synthesis if the script uses a tag this backend can't do."""
+    for segment in segments:
+        if segment.emotion and segment.emotion not in valid:
+            raise ValueError(f"[{segment.emotion}] isn't an emotion {backend} knows. "
+                             f"Valid: {', '.join(sorted(valid))}")
+
+
+def script_segments(text: str, lang: str, pause_ms: int = 0, pronunciations: str = None) -> list:
+    """The text as script_markup segments, with the pronunciation dictionary and --pause-ms applied."""
+    words = script_markup.load_pronunciations(pronunciations).get(lang, {})
+    segments = script_markup.parse(text, lang, words)
+    if pause_ms > 0:
+        segments = script_markup.split_at_sentences(segments, pause_ms)
+    if not any(s.text for s in segments):
+        raise ValueError("There's nothing to say: the text is empty once the markup is taken out.")
+    return segments
+
+
+def apply_speed_pitch(wav: str, speed: float = 1.0, pitch: float = 0.0) -> None:
+    """Change tempo and pitch (semitones) in place with ffmpeg's rubberband filter.
+
+    For backends without native speed/pitch (Chatterbox, XTTS). rubberband with
+    formants preserved keeps a pitch change from sounding like a different (or
+    chipmunk) voice; atempo and librosa's phase vocoder sound metallic on
+    speech. It erases the Chatterbox watermark (measured 1.0 -> 0.0), which is
+    why apply_watermark() runs after every such change.
+    """
+    if speed == 1.0 and pitch == 0.0:
+        return
+    tmp = str(Path(wav).with_suffix(".rubberband.wav"))
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", wav, "-af",
+                    f"rubberband=tempo={speed}:pitch={2 ** (pitch / 12):.6f}"
+                    ":formant=preserved:pitchq=quality", tmp], check=True)
+    os.replace(tmp, wav)
+
+
+_watermarker = None
+
+
+def apply_watermark(wav: str) -> None:
+    """Embed Chatterbox's own Perth watermark into a speech file, in place.
+
+    Chatterbox marks what it generates, but SBV2 and XTTS output carry no mark,
+    and rubberband and Seed-VC (which re-synthesizes the waveform) both erase
+    it. So whatever reaches the video stage gets marked as the last audio step.
+    """
+    global _watermarker
+    import perth
+
+    if _watermarker is None:
+        _watermarker = perth.PerthImplicitWatermarker()
+    audio, sr = sf.read(wav, dtype="float32")
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+    sf.write(wav, _watermarker.apply_watermark(audio, sample_rate=sr), sr)
+
+
+def needs_watermark(backend: str, speed: float, pitch: float, voice_convert: bool) -> bool:
+    """False only for Chatterbox output nothing has touched since Chatterbox marked it."""
+    return backend != "chatterbox" or speed != 1.0 or pitch != 0.0 or bool(voice_convert)
 
 
 def synthesize_speech_xtts(text: str, lang: str, voice_sample: str, out_wav: str,
