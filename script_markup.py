@@ -154,9 +154,17 @@ def parse(text: str, lang: str, pronunciations: dict | None = None) -> list:
         flush_plain()
         trimmed = _trim(pieces)
         pieces.clear()
-        if trimmed:
-            segments.append(Segment(trimmed, emotion[0] if emotion else None,
-                                    emotion[1] if emotion else 1.0, emphasis_at is not None))
+        if not trimmed:
+            return
+        if not any(ch.isalnum() for p in trimmed for ch in p.text):
+            # Nothing to say, only punctuation left after a tag ("*really*.").
+            # It belongs to the words before it, and a TTS asked to say just
+            # "." fails: Chatterbox crashes on it.
+            if segments and segments[-1].pieces:
+                segments[-1].pieces.extend(trimmed)
+            return
+        segments.append(Segment(trimmed, emotion[0] if emotion else None,
+                                emotion[1] if emotion else 1.0, emphasis_at is not None))
 
     i = 0
     while i < len(text):

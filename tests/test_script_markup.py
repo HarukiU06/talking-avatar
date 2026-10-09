@@ -59,6 +59,16 @@ class EmotionAndEmphasis(unittest.TestCase):
         self.assertEqual([(s.text, s.emotion, s.emphasis) for s in segs],
                          [("I am", "happy", False), ("very", "happy", True), ("glad", "happy", False)])
 
+    def test_punctuation_left_after_a_tag_joins_the_previous_segment(self):
+        # Chatterbox crashes on a segment that is only "." (IndexError in its alignment analyzer).
+        segs = parse("Hello, *really*.", "en")
+        self.assertEqual([(s.text, s.emphasis) for s in segs], [("Hello,", False), ("really.", True)])
+        self.assertEqual(texts(parse("[happy]すごい[/happy]！", "ja")), ["すごい！"])
+
+    def test_leading_punctuation_only_segment_is_dropped_but_its_pause_kept(self):
+        segs = parse("。[pause 300]こんにちは", "ja")
+        self.assertEqual([(s.text, s.pause_after_ms) for s in segs], [("", 300), ("こんにちは", 0)])
+
     def test_adjacent_tags_make_no_empty_segments(self):
         self.assertEqual(texts(parse("[happy]A[/happy] [sad]B[/sad]", "en")), ["A", "B"])
 
