@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 import make_avatar as ma
+import script_markup
 from ui import storage
 from ui.jobs import Job, Stage
 
@@ -70,10 +71,23 @@ LANGUAGE_NAMES = {
 }
 
 
+VOICE_NAMES = {"auto": "Auto", "chatterbox": "Chatterbox", "xtts": "XTTS-v2", "sbv2": "Style-Bert-VITS2"}
+
+
 def languages(tts: str) -> list:
     """(name, code) pairs the given voice model can speak, sorted by name."""
-    codes = ma.XTTS_LANGS if tts == "xtts" else ma.CHATTERBOX_LANGS
+    codes = {"xtts": ma.XTTS_LANGS, "sbv2": ma.SBV2_LANGS}.get(tts, ma.CHATTERBOX_LANGS)
     return sorted(((LANGUAGE_NAMES.get(c, c), c) for c in codes), key=lambda pair: pair[0])
+
+
+def speech_backend(options: dict) -> str:
+    """The voice model a job will really use: auto resolves per language and voice file."""
+    tts = options.get("tts") or default("tts")
+    try:
+        return ma.resolve_tts(tts, options.get("lang") or "en", options.get("voice"),
+                              options.get("sbv2_model"))[0]
+    except (ValueError, FileNotFoundError):
+        return tts  # problems() explains why it can't run
 
 
 # Per video. Longer is minutes of speech in one render, which the video
@@ -142,7 +156,10 @@ def plan_stages(options: dict) -> list:
 
 def needed_parts(options: dict) -> list:
     """Keys of ui.system.check_parts() this run depends on."""
-    needed = ["ffmpeg", "xtts" if options.get("tts") == "xtts" else "chatterbox"]
+    # chatterbox stays needed whatever speaks: the main environment and the
+    # watermark come with it.
+    backend = speech_backend(options)
+    needed = ["ffmpeg", "chatterbox"] + ([backend] if backend in ("xtts", "sbv2") else [])
     if options.get("voice_convert"):
         needed.append("seedvc")
     engine = options.get("engine")
@@ -173,10 +190,18 @@ def problems(options: dict, parts: dict) -> list:
     for key in ("photo", "video", "voice", "vc_target", "motion_video"):
         if options.get(key) and not Path(options[key]).is_file():
             found.append(f"The {key.replace('_', ' ')} file is no longer available. Add it again.")
-    tts = options.get("tts") or "chatterbox"
+    tts = options.get("tts") or default("tts")
     if options.get("lang") not in {code for _, code in languages(tts)}:
         name = LANGUAGE_NAMES.get(options.get("lang"), options.get("lang"))
-        found.append(f"{'XTTS-v2' if tts == 'xtts' else 'Chatterbox'} can't speak {name}.")
+        found.append(f"{VOICE_NAMES.get(tts, tts)} can't speak {name}.")
+    elif tts == "sbv2" and ma.sbv2_installed() and options.get("voice")             and ma.find_sbv2_model(options["voice"], options.get("sbv2_model")) is None:
+        found.append("This voice has no trained Style-Bert-VITS2 model yet. Train one with "
+                     "train_sbv2.py (README: Style-Bert-VITS2), or pick Auto.")
+    if clean_text(options.get("text")):
+        try:
+            script_markup.parse(options["text"], options.get("lang") or "en")
+        except script_markup.MarkupError as exc:
+            found.append(f"Script markup: {exc}")
     for key in needed_parts(options):
         part = parts.get(key)
         if part and not part.ready:
@@ -187,7 +212,7 @@ def problems(options: dict, parts: dict) -> list:
 def describe(options: dict) -> str:
     """Short human summary, for the queue and the library."""
     engine = ENGINES.get(options.get("engine"), ("", ""))[0]
-    voice = "XTTS-v2" if options.get("tts") == "xtts" else "Chatterbox"
+    voice = VOICE_NAMES.get(speech_backend(options), "Chatterbox")
     if options.get("voice_convert"):
         voice += " + voice match"
     return f"{engine} · {voice} · {LANGUAGE_NAMES.get(options.get('lang'), options.get('lang'))}"

@@ -290,6 +290,9 @@ def build_app(manager: JobManager) -> gr.Blocks:
                             gr.HTML(_section("2", "Script", "What your avatar says, in any of 23 languages."))
                             text = gr.Textbox(show_label=False, lines=6, max_lines=24,
                                               placeholder=SCRIPT_PLACEHOLDER, elem_id="script")
+                            gr.Markdown("Pauses `[pause 800]` · emotion `[happy]…[/happy]` · emphasis "
+                                        "`*word*` · pronunciation `{word|reading}`, Japanese accent "
+                                        "`{雨|あ'め}`", elem_classes="note")
                             with gr.Row(equal_height=True):
                                 lang = gr.Dropdown(pipeline.languages("chatterbox"), value=pipeline.default("lang"),
                                                    label="Language", min_width=200, elem_id="lang")
@@ -307,8 +310,10 @@ def build_app(manager: JobManager) -> gr.Blocks:
                             engine_info = gr.Markdown(engine_info_md(pipeline.default("engine"), shared["parts"]),
                                                       elem_classes="note")
                             settings["tts"] = tts = gr.Radio(
-                                [("Chatterbox (23 languages)", "chatterbox"),
-                                 ("XTTS-v2 (17 languages, non-commercial)", "xtts")],
+                                [("Auto (Japanese uses your trained voice when there is one)", "auto"),
+                                 ("Chatterbox (23 languages)", "chatterbox"),
+                                 ("XTTS-v2 (17 languages, non-commercial)", "xtts"),
+                                 ("Style-Bert-VITS2 (Japanese, trained voice)", "sbv2")],
                                 value=pipeline.default("tts"), label="Voice model", elem_id="tts")
                             settings["voice_convert"] = gr.Checkbox(
                                 label="Match my voice more closely (Seed-VC)", value=False, elem_id="voice-convert",
@@ -334,6 +339,14 @@ def build_app(manager: JobManager) -> gr.Blocks:
                                         0, 1, step=0.05, value=pipeline.default("vc_denoise"),
                                         label="Noise removal (voice match)",
                                         info="Raise if background noise gets through.")
+                                with gr.Row():
+                                    settings["speed"] = gr.Slider(
+                                        0.5, 2, step=0.05, value=pipeline.default("speed"),
+                                        label="Speed", info="1 is the voice's natural pace.")
+                                    settings["pitch"] = gr.Slider(
+                                        -12, 12, step=0.5, value=pipeline.default("pitch"),
+                                        label="Pitch (semitones)",
+                                        info="Small changes (±2) sound most natural.")
                                 with gr.Row():
                                     settings["vc_steps"] = gr.Slider(
                                         10, 50, step=1, value=pipeline.default("vc_steps"),
@@ -528,7 +541,7 @@ def build_app(manager: JobManager) -> gr.Blocks:
             out = []
             for key in keys:
                 if key == "lang" and values.get("lang"):
-                    tts_value = values.get("tts") or "chatterbox"
+                    tts_value = values.get("tts") or pipeline.default("tts")
                     out.append(gr.update(choices=pipeline.languages(tts_value), value=values["lang"]))
                 elif key == "infinitetalk_steps" and key in values:
                     out.append(values[key] or 0)

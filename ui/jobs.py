@@ -100,6 +100,7 @@ STAGE_MARKERS = (
     ("Prepared voice reference", "speech"),
     ("Loading Chatterbox", "speech"),
     ("Running XTTS:", "speech"),
+    ("Running Style-Bert-VITS2:", "speech"),
     ("Seed-VC reference:", "convert"),
     ("Running Seed-VC:", "convert"),
     ("Source video", "motion"),
