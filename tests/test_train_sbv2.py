@@ -44,5 +44,37 @@ class TrainSbv2(unittest.TestCase):
                          ["a.wav|me|JP|こんにちは。", "c.wav|me|JP|AIの話です。"])
 
 
+class StepChecks(unittest.TestCase):
+    """preprocess_all.py exits 0 even when a sub-step fails, so steps are judged by their outputs."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.data = Path(tmp.name)
+        self.wavs = [self.data / "wavs" / f"me-{i}.wav" for i in range(2)]
+        self.wavs[0].parent.mkdir()
+        (self.data / "config.json").write_text("{}", encoding="utf-8")
+        (self.data / "train.list").write_text("".join(f"{w}|me|JP|テキスト\n" for w in self.wavs),
+                                              encoding="utf-8")
+        (self.data / "val.list").write_text("", encoding="utf-8")
+
+    def test_preprocess_needs_bert_features_for_every_listed_clip(self):
+        self.wavs[0].with_suffix(".bert.pt").write_bytes(b"x")
+        self.assertFalse(train_sbv2.preprocess_done(self.data))
+        self.wavs[1].with_suffix(".bert.pt").write_bytes(b"x")
+        self.assertTrue(train_sbv2.preprocess_done(self.data))
+
+    def test_vectors_need_a_style_vector_for_every_listed_clip(self):
+        self.assertFalse(train_sbv2.vectors_done(self.data))
+        for w in self.wavs:
+            Path(f"{w}.npy").write_bytes(b"x")
+        self.assertTrue(train_sbv2.vectors_done(self.data))
+
+    def test_nothing_listed_is_not_done(self):
+        (self.data / "train.list").unlink()
+        self.assertFalse(train_sbv2.preprocess_done(self.data))
+        self.assertFalse(train_sbv2.vectors_done(self.data))
+
+
 if __name__ == "__main__":
     unittest.main()

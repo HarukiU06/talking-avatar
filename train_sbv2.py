@@ -29,13 +29,14 @@ import soundfile as sf
 import make_avatar as ma
 
 ROOT = Path(__file__).resolve().parent
-STEPS = ("stage", "slice", "transcribe", "preprocess", "train", "styles")
+STEPS = ("stage", "slice", "transcribe", "preprocess", "vectors", "train", "styles")
 _JAPANESE = re.compile(r"[぀-ヿ一-鿿]")
 MIN_MINUTES = 5.0
 
 
 def run_sbv2(args: list) -> None:
-    cmd = [ma.get_venv_python(ma.SBV2_VENV), *args]
+    """Run a Style-Bert-VITS2 script through sbv2_run.py (its runtime fixes are explained there)."""
+    cmd = [ma.get_venv_python(ma.SBV2_VENV), str(ROOT / "sbv2_run.py"), *args]
     print("Running Style-Bert-VITS2:", " ".join(cmd), flush=True)
     env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
     subprocess.run(cmd, cwd=ma.SBV2_DIR, check=True, env=env)
@@ -54,6 +55,29 @@ def record_source(model_dir: Path, voice: str) -> None:
         return
     source_path.write_text(json.dumps({"sha256": digest, "voice": os.path.abspath(voice)}, indent=2),
                            encoding="utf-8")
+
+
+def listed_clips(data_dir: Path) -> list:
+    clips = []
+    for name in ("train.list", "val.list"):
+        listing = data_dir / name
+        if listing.exists():
+            clips += [Path(line.split("|", 1)[0])
+                      for line in listing.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return clips
+
+
+# preprocess_all.py exits 0 even when one of its steps fails (its style-vector
+# step did, under torch 2.8), so each step is judged by what it leaves behind.
+def preprocess_done(data_dir: Path) -> bool:
+    clips = listed_clips(data_dir)
+    return (data_dir / "config.json").exists() and bool(clips) and all(
+        c.with_suffix(".bert.pt").exists() for c in clips)
+
+
+def vectors_done(data_dir: Path) -> bool:
+    clips = listed_clips(data_dir)
+    return bool(clips) and all(Path(f"{c}.npy").exists() for c in clips)
 
 
 def drop_non_japanese(esd_list: Path) -> list:
@@ -131,10 +155,14 @@ def main() -> None:
                                     "-m", "2", "-M", "12"])),
         "transcribe": (lambda: (data_dir / "esd.list").exists(),
                        lambda: transcribe(name, data_dir, args.whisper_device)),
-        "preprocess": (lambda: (data_dir / "train.list").exists() and (data_dir / "config.json").exists(),
+        "preprocess": (lambda: preprocess_done(data_dir),
                        lambda: run_sbv2(["preprocess_all.py", "-m", name, "--use_jp_extra",
                                          "-e", str(args.epochs), "-b", str(args.batch_size),
                                          "--yomi_error", "skip"])),
+        # Also the last step of preprocess_all.py, but there it runs as its own
+        # subprocess, out of sbv2_run.py's reach, and fails; run it here.
+        "vectors": (lambda: vectors_done(data_dir),
+                    lambda: run_sbv2(["style_gen.py", "--config", str(data_dir / "config.json")])),
         "train": (lambda: any(model_dir.glob(f"{name}_e{args.epochs}_s*.safetensors")),
                   lambda: run_sbv2(["train_ms_jp_extra.py", "-m", str(data_dir),
                                     "-c", str(data_dir / "config.json"),
