@@ -84,8 +84,9 @@ def stage(voice: str, staged: Path, denoise: float) -> None:
 def transcribe(name: str, data_dir: Path, device: str) -> None:
     # --use_hf_whisper: runs on the venv's torch 2.8. The default path needs
     # faster-whisper, which setup_sbv2.sh leaves out (see the comment there).
-    run_sbv2(["transcribe.py", "--model_name", name, "--language", "ja", "--model", "large-v3",
-              "--use_hf_whisper", "--device", device])
+    # That path takes its model from --hf_repo_id (empty by default), not --model.
+    run_sbv2(["transcribe.py", "--model_name", name, "--language", "ja",
+              "--use_hf_whisper", "--hf_repo_id", "openai/whisper-large-v3", "--device", device])
     esd = data_dir / "esd.list"
     dropped = drop_non_japanese(esd)
     if dropped:
