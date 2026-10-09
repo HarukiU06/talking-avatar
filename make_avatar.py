@@ -613,16 +613,18 @@ def convert_voice(source_wav: str, target_voice: str, out_wav: str,
     return out_wav
 
 
-def resolve_tts(tts: str, lang: str, voice_sample: str = None, sbv2_model: str = None) -> tuple:
+def resolve_tts(tts: str, lang: str, voice_sample: str = None, sbv2_model: str = None,
+                vc_target: str = None) -> tuple:
     """--tts -> (the backend that will actually run, its SBV2 model folder or None).
 
     auto: Japanese goes to Style-Bert-VITS2 when there's a voice trained on
-    this recording (find_sbv2_model), everything else to Chatterbox. A forced
-    backend that can't serve the request raises instead of falling back.
+    this recording or the voice-match one (find_sbv2_model), everything else
+    to Chatterbox. A forced backend that can't serve the request raises
+    instead of falling back.
     """
     if tts == "auto":
         if lang in SBV2_LANGS and sbv2_installed():
-            model = find_sbv2_model(voice_sample, sbv2_model)
+            model = find_sbv2_model(voice_sample, sbv2_model, vc_target)
             if model:
                 return "sbv2", model
             if sbv2_model:
@@ -634,13 +636,14 @@ def resolve_tts(tts: str, lang: str, voice_sample: str = None, sbv2_model: str =
             raise ValueError(f"Style-Bert-VITS2 JP-Extra speaks Japanese only, not '{lang}'.")
         if not sbv2_installed():
             raise FileNotFoundError("Style-Bert-VITS2 isn't set up. Run ./setup_sbv2.sh first.")
-        model = find_sbv2_model(voice_sample, sbv2_model)
+        model = find_sbv2_model(voice_sample, sbv2_model, vc_target)
         if model is None:
             name = sbv2_model or (Path(voice_sample).stem if voice_sample else "NAME")
+            recordings = " or ".join(str(f) for f in (voice_sample, vc_target) if f)
             raise FileNotFoundError(
-                f"No trained Style-Bert-VITS2 voice for {voice_sample} "
+                f"No trained Style-Bert-VITS2 voice for {recordings} "
                 f"(expected {Path(SBV2_MODELS) / name}/). Train one with: "
-                f"python train_sbv2.py --voice {voice_sample}")
+                f"python train_sbv2.py --voice {vc_target or voice_sample}")
         return "sbv2", model
     return tts, None
 
@@ -648,9 +651,9 @@ def resolve_tts(tts: str, lang: str, voice_sample: str = None, sbv2_model: str =
 def synthesize(tts: str, text: str, lang: str, voice_sample: str, out_wav: str,
                pause_ms: int = 0, cfg_weight: float = 0.5, exaggeration: float = 0.5,
                prep_voice: bool = True, speed: float = 1.0, pitch: float = 0.0,
-               sbv2_model: str = None, pronunciations: str = None) -> str:
+               sbv2_model: str = None, pronunciations: str = None, vc_target: str = None) -> str:
     """Dispatch to the backend --tts resolves to (see resolve_tts)."""
-    backend, model_dir = resolve_tts(tts, lang, voice_sample, sbv2_model)
+    backend, model_dir = resolve_tts(tts, lang, voice_sample, sbv2_model, vc_target)
     if tts == "auto" and lang in SBV2_LANGS and backend == "chatterbox":
         print("Note: Japanese is using Chatterbox, whose pitch accent is often wrong. For correct "
               f"intonation: ./setup_sbv2.sh, then python train_sbv2.py --voice {voice_sample}")
@@ -1276,7 +1279,7 @@ def sbv2_model_ready(model_dir: Path) -> bool:
             and any(model_dir.glob("*.safetensors")))
 
 
-def find_sbv2_model(voice_sample: str = None, name: str = None) -> Path:
+def find_sbv2_model(voice_sample: str = None, name: str = None, vc_target: str = None) -> Path:
     """The trained SBV2 voice for this voice sample, or None.
 
     By name when given; otherwise by content, then by file stem. Content comes
@@ -1284,23 +1287,34 @@ def find_sbv2_model(voice_sample: str = None, name: str = None) -> Path:
     - a byte-for-byte copy under a stem that says nothing about whose it is. The
     stem fallback only applies to a model with no recorded source: one that has
     a hash belongs to that recording alone.
+
+    The voice-match recording (vc_target) is matched by content too, after the
+    voice sample and whether or not --voice-convert is on: it's the same
+    person, and in the app it's where the ~10-minute training recording
+    naturally goes (the voice sample is a 30-second clip).
     """
     root = Path(SBV2_MODELS)
     if name:
         return root / name if sbv2_model_ready(root / name) else None
-    if not root.is_dir() or not voice_sample or not os.path.isfile(voice_sample):
+    recordings = [f for f in (voice_sample, vc_target) if f and os.path.isfile(f)]
+    if not root.is_dir() or not recordings:
         return None
     ready = [d for d in sorted(root.iterdir()) if d.is_dir() and sbv2_model_ready(d)]
     if not ready:
         return None
-    digest = file_sha256(voice_sample)
+    sources = {}
     for model_dir in ready:
         try:
-            source = json.loads((model_dir / "source.json").read_text(encoding="utf-8"))
+            sources[model_dir] = json.loads((model_dir / "source.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        if source.get("sha256") == digest:
-            return model_dir
+    for recording in recordings:
+        digest = file_sha256(recording)
+        for model_dir, source in sources.items():
+            if source.get("sha256") == digest:
+                return model_dir
+    if not voice_sample:
+        return None
     by_stem = root / Path(voice_sample).stem
     return by_stem if by_stem in ready and not (by_stem / "source.json").exists() else None
 
@@ -1539,7 +1553,9 @@ def make_one(photo: str, voice_sample: str, text: str, lang: str, out_video: str
 
     # Resolve the voice model up front: a forced backend that can't run should
     # fail now, not after minutes of work, and the watermark decision needs it.
-    backend, _ = resolve_tts(tts, lang, voice_sample, sbv2_model)
+    # vc_target goes to both resolutions: if only synthesize() saw it, SBV2
+    # speech found through it would skip the watermark below.
+    backend, _ = resolve_tts(tts, lang, voice_sample, sbv2_model, vc_target)
 
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp_wav = tmp.name
@@ -1547,7 +1563,7 @@ def make_one(photo: str, voice_sample: str, text: str, lang: str, out_video: str
         synthesize(tts, text, lang, voice_sample, tmp_wav, pause_ms=pause_ms,
                    cfg_weight=cfg_weight, exaggeration=exaggeration,
                    prep_voice=prep_voice, speed=speed, pitch=pitch, sbv2_model=sbv2_model,
-                   pronunciations=pronunciations)
+                   pronunciations=pronunciations, vc_target=vc_target)
         if not keep_tts_warm:
             # Speech is done; everything below is the video stage, which wants
             # every byte of VRAM it can get. run_batch keeps it warm instead,
@@ -1739,8 +1755,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--tts", default="auto", choices=["auto", "chatterbox", "xtts", "sbv2"],
                         help="Text-to-speech engine. auto (default): Japanese uses your trained "
-                             "Style-Bert-VITS2 voice when there is one (correct pitch accent), "
-                             "everything else Chatterbox. chatterbox: 23 languages. xtts: XTTS-v2, "
+                             "Style-Bert-VITS2 voice (correct pitch accent) when --voice or "
+                             "--vc-target is the recording it was trained on, everything else "
+                             "Chatterbox. chatterbox: 23 languages. xtts: XTTS-v2, "
                              "17 languages, often clones timbre more closely - needs "
                              "./setup_xtts.sh. sbv2: Style-Bert-VITS2, Japanese only - needs "
                              "./setup_sbv2.sh and train_sbv2.py")
@@ -1763,7 +1780,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Reference recording for --voice-convert (default: whatever "
                              "--voice is). Point this at a longer recording of yourself if "
                              "you have one - it only has to establish identity, so it can be "
-                             "longer and less pristine than the TTS reference")
+                             "longer and less pristine than the TTS reference. Also picks your "
+                             "trained Style-Bert-VITS2 voice when it's the training recording, "
+                             "with or without --voice-convert")
     parser.add_argument("--vc-denoise", type=float, default=0.6,
                         help="How hard to denoise the Seed-VC reference before conversion "
                              "(0 = off, 0.6 = default, 1.0 = maximum). Conversion copies the "

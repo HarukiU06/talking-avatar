@@ -57,6 +57,33 @@ class ResolveTts(unittest.TestCase):
             with self.assertRaisesRegex(FileNotFoundError, "setup_sbv2.sh"):
                 ma.resolve_tts("sbv2", "ja", str(self.voice))
 
+    def test_the_voice_match_recording_also_selects_the_trained_voice(self):
+        short = self.tmp / "short.wav"
+        short.write_bytes(b"a short clip of me")
+        self.assertEqual(ma.resolve_tts("auto", "ja", str(short), vc_target=str(self.voice)),
+                         ("sbv2", self.model))
+        self.assertEqual(ma.resolve_tts("sbv2", "ja", str(short), vc_target=str(self.voice)),
+                         ("sbv2", self.model))
+
+    def test_make_one_watermarks_sbv2_speech_found_through_the_voice_match_recording(self):
+        # make_one decides the watermark from its own resolve_tts; if it missed
+        # vc_target while synthesize() honoured it, SBV2 speech would go out unmarked.
+        short = self.tmp / "short.wav"
+        short.write_bytes(b"a short clip of me")
+        calls, seen = [], {}
+        fakes = (("synthesize", lambda *a, **k: (seen.update(k), calls.append("tts"))),
+                 ("release_tts_model", lambda: None),
+                 ("apply_watermark", lambda wav: calls.append("watermark")),
+                 ("render_video", lambda *a, **k: calls.append("video")))
+        for name, fake in fakes:
+            patcher = mock.patch.object(ma, name, fake)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        ma.make_one("face.jpg", str(short), "雨です", "ja", str(self.tmp / "o.mp4"),
+                    engine="sadtalker", tts="auto", vc_target=str(self.voice))
+        self.assertEqual(calls, ["tts", "watermark", "video"])
+        self.assertEqual(seen.get("vc_target"), str(self.voice))
+
     def test_forced_backends_pass_through(self):
         self.assertEqual(ma.resolve_tts("xtts", "ja", None), ("xtts", None))
         self.assertEqual(ma.resolve_tts("chatterbox", "ja", None), ("chatterbox", None))

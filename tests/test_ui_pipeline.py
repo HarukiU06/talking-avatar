@@ -21,6 +21,24 @@ class UiPipeline(unittest.TestCase):
             self.assertIn("Style-Bert-VITS2", pipeline.describe(options))
             self.assertIn("sbv2", pipeline.needed_parts(options))
 
+    def test_the_app_looks_for_the_trained_voice_by_the_voice_match_recording_too(self):
+        options = {"tts": "sbv2", "lang": "ja", "engine": "latentsync", "voice": "short.wav",
+                   "vc_target": "long.wav", "text": "雨です"}
+        seen = []
+
+        def find(voice, name=None, vc_target=None):
+            seen.append(vc_target)
+            return Path("m") if vc_target == "long.wav" else None
+
+        with mock.patch.object(ma, "sbv2_installed", lambda: True), \
+                mock.patch.object(ma, "find_sbv2_model", find), \
+                mock.patch.object(ma, "load_sbv2_styles", lambda d: {"neutral": "Neutral"}), \
+                mock.patch.object(Path, "is_file", lambda self: True):
+            self.assertEqual(pipeline.speech_backend({**options, "tts": "auto"}), "sbv2")
+            found = pipeline.problems(options, {})
+        self.assertFalse(any("no trained" in p for p in found), found)
+        self.assertTrue(seen and all(v == "long.wav" for v in seen), seen)
+
     def test_to_args_passes_speed_and_pitch_and_omits_defaults(self):
         args = pipeline.to_args({"engine": "latentsync", "tts": "auto", "speed": 1.2, "pitch": -2})
         self.assertIn("--speed=1.2", args)

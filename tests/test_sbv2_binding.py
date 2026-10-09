@@ -47,6 +47,22 @@ class FindSbv2Model(unittest.TestCase):
         copy = make_voice(self.tmp / "avatars" / "me" / "voice.wav", voice.read_bytes())
         self.assertEqual(ma.find_sbv2_model(str(copy)), self.models / "newtest")
 
+    def test_model_found_by_the_voice_match_recording(self):
+        # The app's natural setup: a short clip as the voice, the long training
+        # recording as the voice-match target (avatars/<x>/voice_long.wav).
+        long = make_voice(self.tmp / "avatars" / "me" / "voice_long.wav", b"ten minutes of me")
+        make_model(self.models, "me", sha=ma.file_sha256(str(long)))
+        short = make_voice(self.tmp / "avatars" / "me" / "voice.wav", b"thirty seconds of me")
+        self.assertEqual(ma.find_sbv2_model(str(short), vc_target=str(long)), self.models / "me")
+        self.assertIsNone(ma.find_sbv2_model(str(short)))
+
+    def test_voice_hash_wins_over_the_voice_match_recording(self):
+        short = make_voice(self.tmp / "short.wav", b"take one")
+        long = make_voice(self.tmp / "long.wav", b"take two")
+        make_model(self.models, "a_long", sha=ma.file_sha256(str(long)))
+        make_model(self.models, "b_short", sha=ma.file_sha256(str(short)))
+        self.assertEqual(ma.find_sbv2_model(str(short), vc_target=str(long)), self.models / "b_short")
+
     def test_stem_fallback_without_source_json(self):
         make_model(self.models, "newtest")
         voice = make_voice(self.tmp / "newtest.wav")

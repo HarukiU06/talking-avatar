@@ -232,6 +232,9 @@ def main() -> None:
             return
     print(f"\nTrained: {model_dir}")
     print(f"Listen to {model_dir / 'style_samples'} and name the styles in {model_dir / 'styles.yaml'}.")
+    print(f"--lang ja now uses this voice whenever --voice or --vc-target is {args.voice} (or a copy). "
+          "In the app: add it to the avatar as the voice sample or the voice-match recording, and "
+          "set the voice model to Auto (a saved Chatterbox choice stays Chatterbox).")
 
 
 if __name__ == "__main__":

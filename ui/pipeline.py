@@ -81,11 +81,11 @@ def languages(tts: str) -> list:
 
 
 def speech_backend(options: dict) -> str:
-    """The voice model a job will really use: auto resolves per language and voice file."""
+    """The voice model a job will really use: auto resolves per language and voice files."""
     tts = options.get("tts") or default("tts")
     try:
         return ma.resolve_tts(tts, options.get("lang") or "en", options.get("voice"),
-                              options.get("sbv2_model"))[0]
+                              options.get("sbv2_model"), options.get("vc_target"))[0]
     except (ValueError, FileNotFoundError):
         return tts  # problems() explains why it can't run
 
@@ -194,7 +194,9 @@ def problems(options: dict, parts: dict) -> list:
     if options.get("lang") not in {code for _, code in languages(tts)}:
         name = LANGUAGE_NAMES.get(options.get("lang"), options.get("lang"))
         found.append(f"{VOICE_NAMES.get(tts, tts)} can't speak {name}.")
-    elif tts == "sbv2" and ma.sbv2_installed() and options.get("voice")             and ma.find_sbv2_model(options["voice"], options.get("sbv2_model")) is None:
+    elif tts == "sbv2" and ma.sbv2_installed() and options.get("voice") \
+            and ma.find_sbv2_model(options["voice"], options.get("sbv2_model"),
+                                   options.get("vc_target")) is None:
         found.append("This voice has no trained Style-Bert-VITS2 model yet. Train one with "
                      "train_sbv2.py (README: Style-Bert-VITS2), or pick Auto.")
     if clean_text(options.get("text")):

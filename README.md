@@ -331,9 +331,12 @@ styles names in `models/sbv2/me/styles.yaml` (`style_1: style_1` →
 come from your own recording, so a calm reading gives calm styles.
 
 After that, `--lang ja` uses this voice automatically (`--tts auto`, the
-default) whenever `--voice` is the recording it was trained on, in the app
-too: it's matched by the file's content, not its name. `--tts sbv2` forces
-it; `--tts chatterbox` goes back to Chatterbox.
+default) whenever `--voice` or `--vc-target` is the recording it was trained
+on (with or without `--voice-convert`). It's matched by the file's content,
+not its name, so copies count. In the app, add the recording to the avatar
+as its voice sample or its voice-match recording, and set the voice model
+to **Auto**: a Chatterbox choice saved from before stays Chatterbox.
+`--tts sbv2` forces it; `--tts chatterbox` goes back to Chatterbox.
 
 ### InfiniteTalk (optional, `--engine infinitetalk`)
 
