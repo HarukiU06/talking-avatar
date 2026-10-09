@@ -20,6 +20,7 @@ See README.md for setup instructions and supported language codes.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -73,6 +74,17 @@ XTTS_VENV = os.environ.get("XTTS_VENV", str(Path(__file__).parent / ".venv-xtts"
 # setup_seedvc.sh.
 SEEDVC_DIR = os.environ.get("SEEDVC_DIR", str(Path(__file__).parent / "seed-vc"))
 SEEDVC_VENV = os.environ.get("SEEDVC_VENV", str(Path(__file__).parent / ".venv-seedvc"))
+
+# Style-Bert-VITS2 JP-Extra, the Japanese backend behind --tts sbv2 (and
+# --tts auto for ja). Created by setup_sbv2.sh. Unlike the other TTS engines it
+# can't clone zero-shot: train_sbv2.py trains it once on a recording of you,
+# into SBV2_MODELS/<name>/. SBV2_DATA holds the sliced/transcribed training set.
+SBV2_DIR = os.environ.get("SBV2_DIR", str(Path(__file__).parent / "Style-Bert-VITS2"))
+SBV2_VENV = os.environ.get("SBV2_VENV", str(Path(__file__).parent / ".venv-sbv2"))
+SBV2_MODELS = os.environ.get("SBV2_MODELS", str(Path(__file__).parent / "models" / "sbv2"))
+SBV2_DATA = os.environ.get("SBV2_DATA", str(Path(__file__).parent / "models" / "sbv2-data"))
+# JP-Extra is trained on Japanese only.
+SBV2_LANGS = {"ja"}
 
 # Language codes supported by Chatterbox Multilingual V3 (see README section 5)
 CHATTERBOX_LANGS = {
@@ -1004,6 +1016,63 @@ def get_venv_python(venv_dir: str) -> str:
     raise FileNotFoundError(
         f"Couldn't find a Python executable in venv {venv_dir}. Run the matching setup_*.sh script first."
     )
+
+
+def sbv2_installed() -> bool:
+    """setup_sbv2.sh has run: the checkout and its venv both exist."""
+    return ((Path(SBV2_DIR) / "style_bert_vits2").is_dir()
+            and any((Path(SBV2_VENV) / exe).exists() for exe in ("Scripts/python.exe", "bin/python")))
+
+
+_voice_hashes = {}  # (path, mtime_ns, size) -> sha256; the app re-checks on every change
+
+
+def file_sha256(path: str) -> str:
+    """SHA-256 of a file, cached per (path, mtime, size) so a rewrite is noticed."""
+    st = os.stat(path)
+    key = (os.path.abspath(path), st.st_mtime_ns, st.st_size)
+    if key not in _voice_hashes:
+        digest = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for block in iter(lambda: fh.read(1 << 20), b""):
+                digest.update(block)
+        _voice_hashes[key] = digest.hexdigest()
+    return _voice_hashes[key]
+
+
+def sbv2_model_ready(model_dir: Path) -> bool:
+    """train_sbv2.py finished: styles.yaml is written by its last step."""
+    return ((model_dir / "styles.yaml").is_file() and (model_dir / "config.json").is_file()
+            and any(model_dir.glob("*.safetensors")))
+
+
+def find_sbv2_model(voice_sample: str = None, name: str = None) -> Path:
+    """The trained SBV2 voice for this voice sample, or None.
+
+    By name when given; otherwise by content, then by file stem. Content comes
+    first because the app stores every avatar's voice as avatars/<name>/voice.<ext>
+    - a byte-for-byte copy under a stem that says nothing about whose it is. The
+    stem fallback only applies to a model with no recorded source: one that has
+    a hash belongs to that recording alone.
+    """
+    root = Path(SBV2_MODELS)
+    if name:
+        return root / name if sbv2_model_ready(root / name) else None
+    if not root.is_dir() or not voice_sample or not os.path.isfile(voice_sample):
+        return None
+    ready = [d for d in sorted(root.iterdir()) if d.is_dir() and sbv2_model_ready(d)]
+    if not ready:
+        return None
+    digest = file_sha256(voice_sample)
+    for model_dir in ready:
+        try:
+            source = json.loads((model_dir / "source.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if source.get("sha256") == digest:
+            return model_dir
+    by_stem = root / Path(voice_sample).stem
+    return by_stem if by_stem in ready and not (by_stem / "source.json").exists() else None
 
 
 def run_latentsync(
