@@ -51,7 +51,7 @@ also be corrected by hand.
 | Emotion | `[happy]…[/happy]`, `[happy 1.5]…[/happy]` | Name: `[a-z0-9_]+`. Optional intensity 0–3 (default 1). No nesting of emotion spans; unclosed or mismatched → error. |
 | Emphasis | `*word*` | No nesting. May sit inside an emotion span. |
 | Pronunciation | `{surface\|reading}` | The reading replaces the surface text for synthesis. |
-| Accent (ja only) | `{雨\|あ'め}`, `{飴\|あめ0}` | `'` after the mora where pitch drops (the accent nucleus); a trailing `0` means flat (heiban); neither means "reading only, OpenJTalk decides the accent". `'` or `0` on a non-`ja` line → error. |
+| Accent (ja only) | `{雨\|あ'め}`, `{飴\|あめ0}` | `'` after the mora where pitch drops (the accent nucleus); a trailing `0` means flat (heiban); neither means "reading only, OpenJTalk decides the accent". `'` in a non-`ja` reading → error; a trailing `0` there is just text (`{v10\|version 10}`). |
 | Literal characters | `\[`, `\*`, `\{` | Escapes. |
 
 **Pronunciation dictionary**: `pronunciations.yaml` (path via `--pronunciations`,
@@ -161,7 +161,7 @@ Fail loudly with an actionable message; only `auto` falls back, and it warns.
 | `--tts auto`, `ja`, no model | Chatterbox + warning |
 | Unknown emotion tag | Error listing valid tags for that backend (SBV2: names in `styles.yaml`) |
 | Emotion/emphasis tags with XTTS | Error: XTTS has no emotion control |
-| Malformed markup (unclosed/mismatched tag, nested emotion, bad pause value, accent mark on non-`ja`) | Error with the character offset and a snippet |
+| Malformed markup (unclosed/mismatched tag, nested emotion, bad pause value, `'` in a non-`ja` reading) | Error with the character offset and a snippet |
 | Accent override whose reading isn't valid kana / nucleus beyond mora count | Error naming the word |
 | `--speed` / `--pitch` out of range | argparse rejects |
 | `train_sbv2.py` interrupted | Rerun resumes at the first incomplete step / last checkpoint |
