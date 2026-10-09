@@ -20,6 +20,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -76,6 +77,38 @@ def record_source(model_dir: Path, data_dir: Path, voice: str) -> None:
         (folder / "source.json").write_text(source, encoding="utf-8")
 
 
+def finished(data_dir: Path, step: str) -> bool:
+    return (data_dir / ".done" / step).exists()
+
+
+def run_step(data_dir: Path, step: str, done, run) -> None:
+    """Run a step unless it finished before; record it as finished only once its output is there.
+
+    A marker, not the output's mere existence, decides: an interrupted run
+    leaves partial output (transcribe.py appends to esd.list clip by clip), and
+    resuming on that would quietly train on part of the recording.
+    """
+    if finished(data_dir, step):
+        print(f"[{step}] already done")
+        return
+    print(f"[{step}] ...", flush=True)
+    run()
+    if not done():
+        raise SystemExit(f"[{step}] ran but didn't produce its output; see the log above.")
+    (data_dir / ".done").mkdir(parents=True, exist_ok=True)
+    (data_dir / ".done" / step).write_text("", encoding="utf-8")
+
+
+def check_epochs(data_dir: Path, epochs: int) -> None:
+    """--epochs is fixed when the dataset is prepared; a different value later would never finish."""
+    config = data_dir / "config.json"
+    if config.exists():
+        prepared = json.loads(config.read_text(encoding="utf-8")).get("train", {}).get("epochs")
+        if prepared is not None and prepared != epochs:
+            raise SystemExit(f"{data_dir} was prepared for {prepared} epochs. Run with --epochs {prepared}, "
+                             "or delete that folder to prepare it again.")
+
+
 def listed_clips(data_dir: Path) -> list:
     clips = []
     for name in ("train.list", "val.list"):
@@ -125,6 +158,7 @@ def stage(voice: str, staged: Path, denoise: float) -> None:
 
 
 def transcribe(name: str, data_dir: Path, device: str) -> None:
+    (data_dir / "esd.list").unlink(missing_ok=True)  # transcribe.py appends; drop a partial list
     # --use_hf_whisper: runs on the venv's torch 2.8. The default path needs
     # faster-whisper, which setup_sbv2.sh leaves out (see the comment there).
     # That path takes its model from --hf_repo_id (empty by default), not --model.
@@ -168,8 +202,9 @@ def main() -> None:
         "stage": (lambda: staged.exists(),
                   lambda: stage(args.voice, staged, args.denoise)),
         "slice": (lambda: any((data_dir / "raw").glob("*.wav")),
-                  lambda: run_sbv2(["slice.py", "--model_name", name, "-i", str(staged.parent),
-                                    "-m", "2", "-M", "12"])),
+                  lambda: (shutil.rmtree(data_dir / "raw", ignore_errors=True),
+                           run_sbv2(["slice.py", "--model_name", name, "-i", str(staged.parent),
+                                     "-m", "2", "-M", "12"]))),
         "transcribe": (lambda: (data_dir / "esd.list").exists(),
                        lambda: transcribe(name, data_dir, args.whisper_device)),
         "preprocess": (lambda: preprocess_done(data_dir),
@@ -188,13 +223,10 @@ def main() -> None:
                    lambda: run_sbv2([str(ROOT / "sbv2_styles.py"), "--data", str(data_dir),
                                      "--model", str(model_dir), "--clusters", str(args.clusters)])),
     }
+    check_epochs(data_dir, args.epochs)
     for step in STEPS:
         done, run = steps[step]
-        if done():
-            print(f"[{step}] already done")
-        else:
-            print(f"[{step}] ...", flush=True)
-            run()
+        run_step(data_dir, step, done, run)
         if step == args.stop_after:
             print(f"Stopped after {step}. Rerun the same command to continue.")
             return

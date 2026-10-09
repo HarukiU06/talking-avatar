@@ -64,6 +64,34 @@ class TrainSbv2(unittest.TestCase):
                          ["a.wav|me|JP|こんにちは。", "c.wav|me|JP|AIの話です。"])
 
 
+class Resume(unittest.TestCase):
+    """Rerunning after an interruption must redo half-finished steps, not train on them."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.data = Path(tmp.name)
+
+    def test_a_step_counts_as_done_only_once_it_has_finished(self):
+        # transcribe.py appends one line per clip, so a killed run leaves a partial esd.list.
+        (self.data / "esd.list").write_text("a.wav|me|JP|こんにちは。\n", encoding="utf-8")
+        self.assertFalse(train_sbv2.finished(self.data, "transcribe"))
+        train_sbv2.run_step(self.data, "transcribe", lambda: True, lambda: None)
+        self.assertTrue(train_sbv2.finished(self.data, "transcribe"))
+
+    def test_a_step_that_leaves_no_output_fails_loudly(self):
+        with self.assertRaisesRegex(SystemExit, "transcribe"):
+            train_sbv2.run_step(self.data, "transcribe", lambda: False, lambda: None)
+        self.assertFalse(train_sbv2.finished(self.data, "transcribe"))
+
+    def test_epochs_must_match_the_prepared_dataset(self):
+        train_sbv2.check_epochs(self.data, 200)  # nothing prepared yet: fine
+        (self.data / "config.json").write_text('{"train": {"epochs": 100}}', encoding="utf-8")
+        train_sbv2.check_epochs(self.data, 100)
+        with self.assertRaisesRegex(SystemExit, "--epochs 100"):
+            train_sbv2.check_epochs(self.data, 200)
+
+
 class StepChecks(unittest.TestCase):
     """preprocess_all.py exits 0 even when a sub-step fails, so steps are judged by their outputs."""
 
