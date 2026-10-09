@@ -13,8 +13,7 @@ plain text, however many sentences long, stays one segment and so one TTS call:
 splicing per sentence made speech sound mechanical (see
 make_avatar.synthesize_speech), so splits happen only where the script asks.
 
-Pure Python, no model imports: make_avatar.py uses it in .venv and
-sbv2_synth.py imports accent_tones from it in .venv-sbv2.
+Pure Python, no model imports, so it can be tested without any model installed.
 """
 from __future__ import annotations
 
@@ -68,21 +67,6 @@ class Segment:
 
 def count_morae(kana: str) -> int:
     return sum(1 for ch in kana if ch not in _SMALL_KANA)
-
-
-def accent_tones(n_morae: int, nucleus: int) -> list:
-    """Tokyo-dialect pitch per mora (0 low, 1 high) for an accent nucleus.
-
-    0 (heiban): low, then high to the end. 1 (atamadaka): high, then low.
-    n > 1: low, high through mora n, low after.
-    """
-    if n_morae < 1 or not 0 <= nucleus <= n_morae:
-        raise ValueError(f"accent after mora {nucleus} doesn't fit a {n_morae}-mora word")
-    if nucleus == 0:
-        return [0] + [1] * (n_morae - 1)
-    if nucleus == 1:
-        return [1] + [0] * (n_morae - 1)
-    return [0] + [1] * (nucleus - 1) + [0] * (n_morae - nucleus)
 
 
 def parse_reading(reading: str, lang: str) -> Piece:

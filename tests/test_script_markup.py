@@ -2,8 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from script_markup import (MarkupError, Piece, accent_tones, count_morae, load_pronunciations,
-                           parse, split_at_sentences)
+from script_markup import MarkupError, Piece, count_morae, load_pronunciations, parse, split_at_sentences
 
 
 def texts(segments):
@@ -137,17 +136,7 @@ class SentenceSplitting(unittest.TestCase):
                          [("One.", "sad", 450), ("Two.", "sad", 900), ("Three.", None, 0)])
 
 
-class Accent(unittest.TestCase):
-    def test_accent_tones(self):
-        for n, nucleus, tones in [(2, 0, [0, 1]), (2, 1, [1, 0]), (3, 2, [0, 1, 0]),
-                                  (3, 3, [0, 1, 1]), (1, 0, [0]), (1, 1, [1])]:
-            with self.subTest(n=n, nucleus=nucleus):
-                self.assertEqual(accent_tones(n, nucleus), tones)
-
-    def test_accent_tones_rejects_nucleus_past_the_word(self):
-        with self.assertRaises(ValueError):
-            accent_tones(2, 3)
-
+class Morae(unittest.TestCase):
     def test_count_morae(self):
         for kana, n in [("きょう", 2), ("がっこう", 4), ("ラーメン", 4), ("あめ", 2)]:
             with self.subTest(kana=kana):
