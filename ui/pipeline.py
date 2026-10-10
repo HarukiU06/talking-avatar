@@ -11,6 +11,8 @@ import re
 import time
 from pathlib import Path
 
+import yaml
+
 import make_avatar as ma
 from ui import storage
 from ui.jobs import Job, Stage
@@ -70,10 +72,23 @@ LANGUAGE_NAMES = {
 }
 
 
+VOICE_NAMES = {"auto": "Auto", "chatterbox": "Chatterbox", "xtts": "XTTS-v2", "sbv2": "Style-Bert-VITS2"}
+
+
 def languages(tts: str) -> list:
     """(name, code) pairs the given voice model can speak, sorted by name."""
-    codes = ma.XTTS_LANGS if tts == "xtts" else ma.CHATTERBOX_LANGS
+    codes = {"xtts": ma.XTTS_LANGS, "sbv2": ma.SBV2_LANGS}.get(tts, ma.CHATTERBOX_LANGS)
     return sorted(((LANGUAGE_NAMES.get(c, c), c) for c in codes), key=lambda pair: pair[0])
+
+
+def speech_backend(options: dict) -> str:
+    """The voice model a job will really use: auto resolves per language and voice files."""
+    tts = options.get("tts") or default("tts")
+    try:
+        return ma.resolve_tts(tts, options.get("lang") or "en", options.get("voice"),
+                              options.get("sbv2_model"), options.get("vc_target"))[0]
+    except (ValueError, FileNotFoundError):
+        return tts  # problems() explains why it can't run
 
 
 # Per video. Longer is minutes of speech in one render, which the video
@@ -89,6 +104,14 @@ def clean_text(text: str) -> str:
 
 def paragraphs(text: str) -> list:
     return [p for p in (clean_text(chunk) for chunk in re.split(r"\n\s*\n", text or "")) if p]
+
+
+def job_texts(text: str, split: bool) -> list:
+    """The text each queued video will get: one per paragraph, or the whole script as one."""
+    if split:
+        return paragraphs(text)
+    whole = clean_text(text)
+    return [whole] if whole else []
 
 
 def to_args(options: dict) -> list:
@@ -142,7 +165,10 @@ def plan_stages(options: dict) -> list:
 
 def needed_parts(options: dict) -> list:
     """Keys of ui.system.check_parts() this run depends on."""
-    needed = ["ffmpeg", "xtts" if options.get("tts") == "xtts" else "chatterbox"]
+    # chatterbox stays needed whatever speaks: the main environment and the
+    # watermark come with it.
+    backend = speech_backend(options)
+    needed = ["ffmpeg", "chatterbox"] + ([backend] if backend in ("xtts", "sbv2") else [])
     if options.get("voice_convert"):
         needed.append("seedvc")
     engine = options.get("engine")
@@ -159,8 +185,41 @@ def needed_parts(options: dict) -> list:
     return needed
 
 
-def problems(options: dict, parts: dict) -> list:
-    """Reasons this can't run, worded for the person at the screen. Empty = good to go."""
+def script_problems(options: dict, split: bool = False) -> list:
+    """What would stop a job at its speech step, checked on exactly the text each job gets.
+
+    The backend is the one the job will resolve to, so tags are checked
+    against its emotions (a trained voice's styles.yaml, say) and XTTS
+    refuses markup here instead of minutes into a queue.
+    """
+    texts = job_texts(options.get("text"), split)
+    lang = options.get("lang") or "en"
+    try:
+        backend, model_dir = ma.resolve_tts(options.get("tts") or default("tts"), lang, options.get("voice"),
+                                            options.get("sbv2_model"), options.get("vc_target"))
+    except (ValueError, FileNotFoundError):
+        return []  # problems() already says why this voice model can't run
+    errors = {}  # message -> paragraph numbers, so ten paragraphs with one mistake read as one line
+    for number, text in enumerate(texts, 1):
+        try:
+            ma.check_script(text, lang, backend, model_dir, int(options.get("pause_ms") or 0),
+                            options.get("pronunciations"))
+        except (ValueError, OSError, yaml.YAMLError) as exc:
+            errors.setdefault(str(exc), []).append(number)
+    found = []
+    for message, numbers in errors.items():
+        where = ""
+        if len(texts) > 1:
+            where = f" (paragraph{'s' if len(numbers) > 1 else ''} {', '.join(map(str, numbers))})"
+        found.append(f"Script markup{where}: {message}")
+    return found
+
+
+def problems(options: dict, parts: dict, split: bool = False) -> list:
+    """Reasons this can't run, worded for the person at the screen. Empty = good to go.
+
+    split: "One video per paragraph" is ticked, so each paragraph is its own job.
+    """
     found = []
     if not clean_text(options.get("text")):
         found.append("Type what your avatar should say.")
@@ -173,10 +232,17 @@ def problems(options: dict, parts: dict) -> list:
     for key in ("photo", "video", "voice", "vc_target", "motion_video"):
         if options.get(key) and not Path(options[key]).is_file():
             found.append(f"The {key.replace('_', ' ')} file is no longer available. Add it again.")
-    tts = options.get("tts") or "chatterbox"
+    tts = options.get("tts") or default("tts")
     if options.get("lang") not in {code for _, code in languages(tts)}:
         name = LANGUAGE_NAMES.get(options.get("lang"), options.get("lang"))
-        found.append(f"{'XTTS-v2' if tts == 'xtts' else 'Chatterbox'} can't speak {name}.")
+        found.append(f"{VOICE_NAMES.get(tts, tts)} can't speak {name}.")
+    elif tts == "sbv2" and ma.sbv2_installed() and options.get("voice") \
+            and ma.find_sbv2_model(options["voice"], options.get("sbv2_model"),
+                                   options.get("vc_target")) is None:
+        found.append("This voice has no trained Style-Bert-VITS2 model yet. Train one with "
+                     "train_sbv2.py (README: Style-Bert-VITS2), or pick Auto.")
+    elif clean_text(options.get("text")):
+        found += script_problems(options, split)
     for key in needed_parts(options):
         part = parts.get(key)
         if part and not part.ready:
@@ -187,7 +253,7 @@ def problems(options: dict, parts: dict) -> list:
 def describe(options: dict) -> str:
     """Short human summary, for the queue and the library."""
     engine = ENGINES.get(options.get("engine"), ("", ""))[0]
-    voice = "XTTS-v2" if options.get("tts") == "xtts" else "Chatterbox"
+    voice = VOICE_NAMES.get(speech_backend(options), "Chatterbox")
     if options.get("voice_convert"):
         voice += " + voice match"
     return f"{engine} · {voice} · {LANGUAGE_NAMES.get(options.get('lang'), options.get('lang'))}"

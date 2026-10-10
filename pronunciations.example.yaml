@@ -1,0 +1,13 @@
+# Copy to pronunciations.yaml (gitignored) to fix how words are read.
+# Per language code: word -> reading. Applied wherever the word appears
+# outside {word|reading} markup, which always wins.
+#
+# Japanese readings can also set the pitch accent:
+#   ' after the mora where the pitch drops   雨 -> あ'め   (high-low)
+#   a trailing 0 for a flat word             飴 -> あめ0   (low-high)
+#   neither: just the reading; the accent is predicted as usual
+ja:
+  雨: "あ'め"
+  飴: "あめ0"
+en:
+  Ueno: "oo-EH-no"

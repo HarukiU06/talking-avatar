@@ -62,6 +62,9 @@ def check_parts() -> dict:
              _has_venv(ma.SEEDVC_VENV) and _exists(ma.SEEDVC_DIR, "inference.py")),
         Part("xtts", "XTTS-v2", "Alternative voice model (non-commercial licence).", "./setup_xtts.sh",
              _has_venv(ma.XTTS_VENV)),
+        Part("sbv2", "Style-Bert-VITS2",
+             "Japanese with correct pitch accent, in a voice trained on yours (train_sbv2.py).",
+             "./setup_sbv2.sh", ma.sbv2_installed()),
         Part("wav2lip", "Wav2Lip", "Optional lip refinement for the Lightweight engine.", "./setup_wav2lip.sh",
              _has_venv(ma.WAV2LIP_VENV) and _exists(ma.WAV2LIP_DIR, "checkpoints", "wav2lip_gan.pth")),
     ]
