@@ -89,6 +89,41 @@ def drop_external_tags() -> None:
     routes.templates.TemplateResponse = response
 
 
+# Gradio translates its own labels ("Drop File Here", "Click to Upload", ...)
+# into the browser's language, so a Japanese-locale browser got a half-Japanese
+# UI. Its locale comes from navigator.language; this runs before Gradio's
+# scripts and makes that read English.
+_ENGLISH_ONLY = ('<script>try{Object.defineProperty(navigator,"language",{get:()=>"en"});'
+                 'Object.defineProperty(navigator,"languages",{get:()=>["en"]})}catch(e){}</script>')
+
+
+def force_english() -> None:
+    """Put the English-locale script first in the page's <head>.
+
+    Like drop_external_tags, this quietly does nothing if a Gradio update
+    changes the template.
+    """
+    try:
+        from gradio import routes
+        original = routes.templates.TemplateResponse
+    except (ImportError, AttributeError):
+        return
+
+    def response(*args, **kwargs):
+        resp = original(*args, **kwargs)
+        try:
+            body = resp.body.decode("utf-8")
+            patched = re.sub(r"<head[^>]*>", lambda m: m.group(0) + _ENGLISH_ONLY, body, count=1)
+            if patched != body:
+                resp.body = patched.encode("utf-8")
+                resp.headers["content-length"] = str(len(resp.body))
+        except (AttributeError, UnicodeDecodeError):
+            pass
+        return resp
+
+    routes.templates.TemplateResponse = response
+
+
 def theme() -> gr.themes.Base:
     system_fonts = ["ui-sans-serif", "system-ui", "-apple-system", "Segoe UI", "Roboto", "Noto Sans",
                     "Helvetica Neue", "Arial", "sans-serif"]

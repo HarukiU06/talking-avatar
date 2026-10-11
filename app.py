@@ -67,6 +67,7 @@ def main() -> None:
     for folder in (storage.OUTPUT_DIR, storage.AVATARS_DIR):
         folder.mkdir(parents=True, exist_ok=True)
     web.drop_external_tags()
+    web.force_english()
     manager = JobManager()
     demo = build_app(manager)
     demo.launch(
